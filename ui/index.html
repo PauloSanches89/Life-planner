@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Life planner</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="banner" class="banner" hidden>
+    <ul id="banner-list"></ul>
+    <button id="banner-dismiss" type="button">Dismiss</button>
+  </div>
+  <header class="topbar">
+    <div class="topbar-actions">
+      <button id="new-task" type="button">New task</button>
+      <button id="undo" type="button">Undo</button>
+      <button id="redo" type="button">Redo</button>
+    </div>
+    <div class="topbar-day">
+      <label for="selected-day">Day</label>
+      <input id="selected-day" type="date">
+    </div>
+    <div class="profile">
+      <span id="profile-name">Local user</span>
+      <span id="avatar" class="avatar" aria-hidden="true">L</span>
+    </div>
+  </header>
+  <p id="form-error" class="form-error" hidden></p>
+  <div class="workspace">
+    <aside class="task-column">
+      <div id="task-list" class="task-list"></div>
+      <footer id="task-count" class="task-count">Total tasks for today: 0</footer>
+    </aside>
+    <main id="detail" class="detail">
+      <p class="empty">Loading…</p>
+    </main>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+userdata/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+_window_check.py
