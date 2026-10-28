@@ -21,3 +21,5 @@ If `python` on your `PATH` is already 3.14, `python -m venv .venv` is enough.
 .\.venv\Scripts\Activate.ps1
 python main.py
 ```
+
+Double-click [dist/Life-planner/Life-planner.exe](dist/Life-planner/Life-planner.exe) to run the same window without activating the virtual environment. That copy keeps its tasks in `dist/Life-planner/userdata`. Rebuild it with `pyinstaller life-planner.spec` after `pip install -e ".[dev]"`.

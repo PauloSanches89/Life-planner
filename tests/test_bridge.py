@@ -60,6 +60,21 @@ def test_pasted_links_keep_kind_and_default_label(clock, tmp_path):
     ]
 
 
+def test_ongoing_task_stays_on_a_later_day(clock, tmp_path):
+    api, _service = build(clock, tmp_path)
+    task_id = api.create_task()["task"]["id"]
+
+    marked = api.update_task(task_id, None, None, None, None, True)
+    later = api.set_selected_day("2026-12-01", task_id)
+
+    assert marked["ok"] is True
+    assert marked["task"]["ongoing"] is True
+    assert marked["task"]["start"] is None
+    assert marked["task"]["end"] is None
+    assert later["task"]["id"] == task_id
+    assert later["screen"]["tasks"][0]["ongoing"] is True
+
+
 def test_invalid_span_returns_an_error(clock, tmp_path):
     api, _service = build(clock, tmp_path)
     task_id = api.create_task()["task"]["id"]

@@ -16,7 +16,7 @@ class NotFoundError(PlannerError):
 
 
 class InvalidSpan(PlannerError):
-    """A task end date is before its start date."""
+    """A task end date is before its start date, or a dated task is missing a date."""
 
 
 class EmptyHistory(PlannerError):
@@ -88,6 +88,7 @@ class Task:
     subtasks: list[Subtask]
     links: list[ResourceLink]
     alarms: list[Alarm]
+    ongoing: bool = False
 
 
 @dataclass
@@ -110,7 +111,11 @@ STORE_VERSION = 1
 
 
 def covers(task: Task, day: date) -> bool:
-    """True when day sits inside the task span, including both ends."""
+    """True for an ongoing task, or when day sits inside the span, including both ends."""
+    if task.ongoing:
+        return True
+    if task.start_date is None or task.end_date is None:
+        return False
     return task.start_date <= day <= task.end_date
 
 
@@ -153,8 +158,9 @@ def task_to_dict(task: Task) -> dict:
         "id": task.id,
         "title": task.title,
         "description": task.description,
-        "start_date": task.start_date.isoformat(),
-        "end_date": task.end_date.isoformat(),
+        "start_date": task.start_date.isoformat() if task.start_date is not None else None,
+        "end_date": task.end_date.isoformat() if task.end_date is not None else None,
+        "ongoing": task.ongoing,
         "created_at": task.created_at.isoformat(),
         "subtasks": [subtask_to_dict(item) for item in task.subtasks],
         "links": [link_to_dict(item) for item in task.links],
@@ -202,6 +208,21 @@ def _require_date(data: dict, key: str, label: str) -> date:
         return date.fromisoformat(raw)
     except ValueError as exc:
         raise StoreError(f"{label}.{key} must be an ISO date") from exc
+
+
+def _optional_date(data: dict, key: str, label: str) -> date | None:
+    if key not in data or data[key] is None:
+        return None
+    return _require_date(data, key, label)
+
+
+def _optional_bool(data: dict, key: str, label: str) -> bool:
+    if key not in data:
+        return False
+    value = data[key]
+    if not isinstance(value, bool):
+        raise StoreError(f"{label}.{key} must be true or false")
+    return value
 
 
 def _require_datetime(data: dict, key: str, label: str) -> datetime:
@@ -259,16 +280,24 @@ def task_from_dict(data: object) -> Task:
         raise StoreError("task collections must be lists")
     subtasks = [subtask_from_dict(item) for item in subtasks_raw]
     subtasks.sort(key=lambda item: item.position)
+    ongoing = _optional_bool(raw, "ongoing", "task")
+    if ongoing:
+        start_date = _optional_date(raw, "start_date", "task")
+        end_date = _optional_date(raw, "end_date", "task")
+    else:
+        start_date = _require_date(raw, "start_date", "task")
+        end_date = _require_date(raw, "end_date", "task")
     return Task(
         id=_require_str(raw, "id", "task"),
         title=_require_str(raw, "title", "task"),
         description=_require_str(raw, "description", "task"),
-        start_date=_require_date(raw, "start_date", "task"),
-        end_date=_require_date(raw, "end_date", "task"),
+        start_date=start_date,
+        end_date=end_date,
         created_at=_require_datetime(raw, "created_at", "task"),
         subtasks=subtasks,
         links=[link_from_dict(item) for item in links_raw],
         alarms=[alarm_from_dict(item) for item in alarms_raw],
+        ongoing=ongoing,
     )
 
 

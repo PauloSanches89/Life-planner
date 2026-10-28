@@ -1,3 +1,4 @@
+import json
 import os
 from datetime import date, datetime
 
@@ -30,6 +31,20 @@ def test_roundtrip_keeps_profile_day_and_task_graph(store, clock):
     assert reloaded.get_selected_day() == date(2026, 10, 30)
     assert reloaded.get_task(task.id) == service.get_task(task.id)
     assert not (store.root / "store.json.tmp").exists()
+
+
+def test_tasks_saved_before_ongoing_still_load(store, clock):
+    service = PlannerService(store, clock)
+    task = service.create_task()
+    payload = json.loads(store.path.read_text(encoding="utf-8"))
+    del payload["tasks"][0]["ongoing"]
+    store.path.write_text(json.dumps(payload), encoding="utf-8")
+
+    reloaded = Store(store.root, clock).load()
+
+    assert reloaded.tasks[0].id == task.id
+    assert reloaded.tasks[0].ongoing is False
+    assert reloaded.tasks[0].start_date == date(2026, 10, 28)
 
 
 def test_anonymous_profile_is_stable_across_reloads(tmp_path, clock):

@@ -324,6 +324,26 @@ textarea,
   flex: 1;
 }
 
+.ongoing-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  font-size: 14px;
+  color: #1b1f24;
+}
+
+.ongoing-toggle input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+
+.span-row input:disabled {
+  background: #f3f4f6;
+  color: #8b949e;
+}
+
 .span-row {
   align-items: end;
 }

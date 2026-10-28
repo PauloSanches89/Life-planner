@@ -23,6 +23,7 @@ from planner.models import (
     ResourceLink,
     Subtask,
     Task,
+    covers,
     parse_link_kind,
     require_aware,
 )
@@ -66,9 +67,7 @@ class PlannerService:
     def list_tasks_on(self, day: date) -> list[Task]:
         with self._lock:
             document = self._store.load()
-            return copy.deepcopy(
-                [task for task in document.tasks if task.start_date <= day <= task.end_date]
-            )
+            return copy.deepcopy([task for task in document.tasks if covers(task, day)])
 
     def get_task(self, task_id: str) -> Task:
         with self._lock:
@@ -88,6 +87,7 @@ class PlannerService:
                 subtasks=[],
                 links=[],
                 alarms=[],
+                ongoing=False,
             )
             document.tasks.append(task)
             self._persist_tasks(document, before)
@@ -101,21 +101,30 @@ class PlannerService:
         description: str | None = None,
         start_date: date | None = None,
         end_date: date | None = None,
+        ongoing: bool | None = None,
     ) -> Task:
         with self._lock:
             document = self._store.load()
             before = copy.deepcopy(document.tasks)
             task = self._find(document, task_id)
-            new_start = task.start_date if start_date is None else start_date
-            new_end = task.end_date if end_date is None else end_date
-            if new_end < new_start:
-                raise InvalidSpan("Task end date must be on or after the start date")
+            new_ongoing = task.ongoing if ongoing is None else ongoing
+            if new_ongoing:
+                new_start = None
+                new_end = None
+            else:
+                new_start = task.start_date if start_date is None else start_date
+                new_end = task.end_date if end_date is None else end_date
+                if new_start is None or new_end is None:
+                    raise InvalidSpan("A task needs a start and end date unless it is ongoing")
+                if new_end < new_start:
+                    raise InvalidSpan("Task end date must be on or after the start date")
             if title is not None:
                 task.title = title
             if description is not None:
                 task.description = description
             task.start_date = new_start
             task.end_date = new_end
+            task.ongoing = new_ongoing
             self._persist_tasks(document, before)
             return copy.deepcopy(task)
 

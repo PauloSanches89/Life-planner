@@ -75,7 +75,9 @@ function renderCards() {
     const open = el("button", "card-open");
     open.type = "button";
     open.append(el("div", "card-title", item.title || "Untitled"));
-    if (item.start !== item.end) {
+    if (item.ongoing) {
+      open.append(el("div", "card-span", "Ongoing"));
+    } else if (item.start !== item.end) {
       open.append(el("div", "card-span", formatDay(item.start) + " – " + formatDay(item.end)));
     }
     open.addEventListener("click", () => run(() => selectTask(item.id)));
@@ -162,18 +164,32 @@ function descriptionField() {
 }
 
 function spanFields() {
+  const wrap = el("div");
+  const toggle = el("label", "ongoing-toggle");
+  const checkbox = el("input");
+  checkbox.id = "ongoing";
+  checkbox.type = "checkbox";
+  checkbox.checked = task.ongoing;
+  checkbox.addEventListener("change", () => run(saveSpan));
+  toggle.append(checkbox, document.createTextNode("Ongoing"));
   const row = el("div", "span-row");
-  row.append(dateField("Start", "start-date", task.start), dateField("End", "end-date", task.end));
-  return row;
+  row.append(
+    dateField("Start", "start-date", task.ongoing ? "" : task.start, task.ongoing),
+    dateField("End", "end-date", task.ongoing ? "" : task.end, task.ongoing)
+  );
+  wrap.append(toggle, row);
+  return wrap;
 }
 
-function dateField(labelText, id, value) {
+function dateField(labelText, id, value, disabled) {
   const label = el("label", null, labelText);
   label.htmlFor = id;
   const input = el("input");
   input.id = id;
   input.type = "date";
-  input.value = value;
+  input.value = value || "";
+  input.disabled = disabled;
+  input.required = !disabled;
   input.addEventListener("change", () => run(saveSpan));
   label.append(input);
   return label;
@@ -322,18 +338,26 @@ async function changeDay() {
 }
 
 async function saveTitle(id, value) {
-  await commit(await api().update_task(id, value, null, null, null), id);
+  await commit(await api().update_task(id, value, null, null, null, null), id);
 }
 
 async function saveDescription(id, value) {
-  await commit(await api().update_task(id, null, value, null, null), id);
+  await commit(await api().update_task(id, null, value, null, null, null), id);
 }
 
 async function saveSpan() {
   const id = selectedId;
-  const start = document.getElementById("start-date").value;
-  const end = document.getElementById("end-date").value;
-  await commit(await api().update_task(id, null, null, start, end), id);
+  const ongoing = document.getElementById("ongoing").checked;
+  let start = document.getElementById("start-date").value || null;
+  let end = document.getElementById("end-date").value || null;
+  if (ongoing) {
+    start = null;
+    end = null;
+  } else if (!start || !end) {
+    start = start || screen.selected_day;
+    end = end || screen.selected_day;
+  }
+  await commit(await api().update_task(id, null, null, start, end, ongoing), id);
 }
 
 async function commit(result, id) {

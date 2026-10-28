@@ -28,12 +28,17 @@ def _link_dict(link: ResourceLink) -> dict:
     }
 
 
+def _iso_date(value: date | None) -> str | None:
+    return None if value is None else value.isoformat()
+
+
 def _task_summary(task: Task) -> dict:
     return {
         "id": task.id,
         "title": task.title,
-        "start": task.start_date.isoformat(),
-        "end": task.end_date.isoformat(),
+        "start": _iso_date(task.start_date),
+        "end": _iso_date(task.end_date),
+        "ongoing": task.ongoing,
         "links": [_link_dict(link) for link in task.links],
     }
 
@@ -55,8 +60,9 @@ def _task_dict(task: Task) -> dict:
         "id": task.id,
         "title": task.title,
         "description": task.description,
-        "start": task.start_date.isoformat(),
-        "end": task.end_date.isoformat(),
+        "start": _iso_date(task.start_date),
+        "end": _iso_date(task.end_date),
+        "ongoing": task.ongoing,
         "created_at": task.created_at.isoformat(),
         "subtasks": [_subtask_dict(item) for item in task.subtasks],
         "links": [_link_dict(link) for link in task.links],
@@ -101,7 +107,7 @@ class JsApi:
 
         return _invoke(action)
 
-    def update_task(self, task_id, title, description, start_date, end_date):
+    def update_task(self, task_id, title, description, start_date, end_date, ongoing=None):
         def action():
             changes = {}
             if title is not None:
@@ -112,6 +118,10 @@ class JsApi:
                 changes["start_date"] = date.fromisoformat(start_date)
             if end_date is not None:
                 changes["end_date"] = date.fromisoformat(end_date)
+            if ongoing is not None:
+                if not isinstance(ongoing, bool):
+                    raise ValueError("ongoing must be true or false")
+                changes["ongoing"] = ongoing
             self._service.update_task(task_id, **changes)
             return self._payload(task_id)
 

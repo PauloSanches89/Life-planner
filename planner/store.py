@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 from uuid import uuid4
 
@@ -59,5 +60,7 @@ class Store:
 
 
 def default_store_root() -> Path:
-    """Repo-level userdata directory. Callers pass a different root per subject later."""
+    """Repo userdata from source, or a userdata folder next to the frozen executable."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent / "userdata"
     return Path(__file__).resolve().parent.parent / "userdata"

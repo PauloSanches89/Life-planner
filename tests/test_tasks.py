@@ -53,6 +53,49 @@ def test_span_edit_drops_the_task_from_the_locked_day_only(service):
     assert [item.id for item in service.list_tasks_on(date(2026, 10, 31))] == [task.id]
 
 
+def test_ongoing_task_persists_on_every_day_without_dates(service, store):
+    task = service.create_task()
+    service.update_task(task.id, title="Keep", ongoing=True)
+
+    stored = service.get_task(task.id)
+    assert stored.ongoing is True
+    assert stored.start_date is None
+    assert stored.end_date is None
+    assert stored.title == "Keep"
+    assert [item.id for item in service.list_tasks_on(date(2026, 10, 1))] == [task.id]
+    assert [item.id for item in service.list_tasks_on(date(2026, 12, 31))] == [task.id]
+
+    payload = json.loads(store.path.read_text(encoding="utf-8"))
+    assert payload["tasks"][0]["ongoing"] is True
+    assert payload["tasks"][0]["start_date"] is None
+    assert payload["tasks"][0]["end_date"] is None
+
+    service.update_task(
+        task.id,
+        ongoing=False,
+        start_date=date(2026, 10, 28),
+        end_date=date(2026, 10, 28),
+    )
+    assert service.get_task(task.id).ongoing is False
+    assert service.list_tasks_on(date(2026, 10, 27)) == []
+    assert [item.id for item in service.list_tasks_on(date(2026, 10, 28))] == [task.id]
+
+
+def test_leaving_ongoing_without_dates_keeps_the_task_ongoing(service):
+    task = service.create_task()
+    service.update_task(task.id, ongoing=True)
+
+    with pytest.raises(InvalidSpan):
+        service.update_task(task.id, ongoing=False)
+
+    stored = service.get_task(task.id)
+    assert stored.ongoing is True
+    assert stored.start_date is None
+    service.undo()
+    assert service.get_task(task.id).ongoing is False
+    assert service.get_task(task.id).start_date == date(2026, 10, 28)
+
+
 def test_invalid_span_does_not_change_the_task(service):
     task = service.create_task()
 
