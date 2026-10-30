@@ -5,6 +5,7 @@ from pathlib import Path
 import webview
 
 from planner.alarms import AlarmScheduler
+from planner.assistant import OllamaWarmup
 from planner.clock import SystemClock
 from planner.crypto import load_master_key
 from planner.server import PlannerApp
@@ -27,6 +28,10 @@ def main() -> None:
     app.serve()
     scheduler = AlarmScheduler(app.books, clock)
     scheduler.start()
+    warmup = None
+    if settings.ollama_model:
+        warmup = OllamaWarmup(settings.ollama_base_url, settings.ollama_model)
+        warmup.start()
     try:
         webview.create_window(
             "Life planner",
@@ -39,6 +44,8 @@ def main() -> None:
         profile.mkdir(parents=True, exist_ok=True)
         webview.start(private_mode=False, storage_path=str(profile))
     finally:
+        if warmup is not None:
+            warmup.stop()
         scheduler.stop()
         app.stop()
 

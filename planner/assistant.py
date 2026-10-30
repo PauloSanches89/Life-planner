@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from datetime import date
 from typing import Protocol
 from urllib.error import HTTPError, URLError
@@ -53,15 +54,27 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "create_task",
-            "description": "Create a task with the name the user gave. Ask what to add when it is a list.",
+            "description": (
+                "Create a task with the name the user gave. "
+                "The task is shown on every day from start_date through end_date, including both. "
+                "For one day, set both dates to that ISO date. "
+                "For several days, set start_date to the first day and end_date to the last. "
+                "Ask what to add when it is a list."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "title": {"type": "string"},
                     "description": {"type": "string"},
                     "location": {"type": "string"},
-                    "start_date": {"type": "string"},
-                    "end_date": {"type": "string"},
+                    "start_date": {
+                        "type": "string",
+                        "description": "First day of the span, YYYY-MM-DD. Equal to end_date for a single day.",
+                    },
+                    "end_date": {
+                        "type": "string",
+                        "description": "Last day of the span, YYYY-MM-DD. Equal to start_date for a single day.",
+                    },
                     "ongoing": {"type": "boolean"},
                     "subtasks": {"type": "array", "items": {"type": "string"}},
                     "links": {
@@ -86,7 +99,10 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "update_task",
-            "description": "Change fields the user asked to change on an existing task.",
+            "description": (
+                "Change fields the user asked to change on an existing task. "
+                "To move or resize the span, set start_date to the first day and end_date to the last day."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -94,8 +110,14 @@ TOOLS = [
                     "title": {"type": "string"},
                     "description": {"type": "string"},
                     "location": {"type": "string"},
-                    "start_date": {"type": "string"},
-                    "end_date": {"type": "string"},
+                    "start_date": {
+                        "type": "string",
+                        "description": "First day of the span, YYYY-MM-DD.",
+                    },
+                    "end_date": {
+                        "type": "string",
+                        "description": "Last day of the span, YYYY-MM-DD.",
+                    },
                     "ongoing": {"type": "boolean"},
                 },
                 "required": ["task_id"],
@@ -402,6 +424,7 @@ class OllamaChatClient:
             "messages": messages,
             "temperature": 0.2,
             "stream": False,
+            "keep_alive": OLLAMA_KEEP_ALIVE,
         }
         if tools:
             body["tools"] = tools
@@ -424,6 +447,51 @@ class OllamaChatClient:
         except (TimeoutError, json.JSONDecodeError) as exc:
             raise RuntimeError("Ollama request failed") from exc
         return _ollama_message(payload)
+
+
+OLLAMA_KEEP_ALIVE = "2m"
+OLLAMA_REFRESH_SECONDS = 30
+
+
+class OllamaWarmup:
+    """Refresh a two-minute Ollama lease while the app is open, then unload on close."""
+
+    def __init__(self, base_url: str, model: str, opener=None, interval: float = OLLAMA_REFRESH_SECONDS) -> None:
+        self._base_url = base_url.rstrip("/")
+        self._model = model
+        self._opener = opener or urlopen
+        self._interval = interval
+        self._closed = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        self._thread = threading.Thread(target=self._hold, name="ollama-warmup", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._closed.set()
+        if self._thread is not None:
+            self._thread.join()
+        _ollama_keep_alive(self._base_url, self._model, 0, self._opener, 10)
+
+    def _hold(self) -> None:
+        while not self._closed.is_set():
+            _ollama_keep_alive(self._base_url, self._model, OLLAMA_KEEP_ALIVE, self._opener, 180)
+            self._closed.wait(self._interval)
+
+
+def _ollama_keep_alive(base_url: str, model: str, keep_alive: int | str, opener, timeout: float) -> None:
+    request = Request(
+        f"{base_url}/api/generate",
+        data=json.dumps({"model": model, "keep_alive": keep_alive}).encode("utf-8"),
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with opener(request, timeout=timeout) as response:
+            response.read()
+    except (URLError, TimeoutError, OSError):
+        return
 
 
 def _ollama_message(payload: dict) -> dict:
@@ -553,6 +621,12 @@ def _system_prompt(service: PlannerService, mode: str) -> str:
         "Use tools to read and change only what they asked for. "
         "When they ask you to read tasks, include each description and its subtasks. "
         "When they ask you to create a task, use the name they gave. "
+        "A task covers every day from start_date through end_date, including both. "
+        "When they name one day, set both dates to that day. "
+        "When they name a range, set start_date to the first day and end_date to the last day. "
+        "Write dates as YYYY-MM-DD, using the year of the selected day unless they name another year. "
+        "The selected day is only the day open in the window. The span may start or end on other days. "
+        "Set ongoing only when they ask for a task with no end date. "
         "If that task is a list, such as shopping, create it and then ask which items to add. "
         "Do not invent list items. "
         f"The current reply mode is {mode}. "
@@ -596,7 +670,8 @@ def _review(checker: ChatClient | None, user_text: str, name: str, arguments: di
                 "content": (
                     "You check whether a proposed planner edit is a reasonable reading of the user's request. "
                     'Reply with JSON only: {"allow": true} or {"allow": false, "reason": "why not"}. '
-                    "Refuse edits the user did not ask for."
+                    "Refuse edits the user did not ask for. "
+                    "A start_date and a later end_date are allowed when the user asked for more than one day."
                 ),
             },
             {
@@ -642,6 +717,23 @@ def _related_task(service: PlannerService, arguments: dict):
         return None
 
 
+def _span_from_arguments(arguments: dict) -> tuple[date | None, date | None]:
+    """One named day fills both ends. A range keeps the first day and the last day."""
+    start = _iso_day(arguments.get("start_date"))
+    end = _iso_day(arguments.get("end_date"))
+    if start is not None and end is None:
+        end = start
+    elif end is not None and start is None:
+        start = end
+    return start, end
+
+
+def _iso_day(value) -> date | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return date.fromisoformat(value.strip())
+
+
 def _apply(service: PlannerService, name: str, arguments: dict) -> tuple[str | None, bool, dict]:
     if name == "list_tasks":
         day = service.get_selected_day() if not arguments.get("day") else date.fromisoformat(arguments["day"])
@@ -657,14 +749,18 @@ def _apply(service: PlannerService, name: str, arguments: dict) -> tuple[str | N
             changes["description"] = str(arguments["description"])
         if arguments.get("location"):
             changes["location"] = str(arguments["location"])
-        if arguments.get("start_date"):
-            changes["start_date"] = date.fromisoformat(arguments["start_date"])
-        if arguments.get("end_date"):
-            changes["end_date"] = date.fromisoformat(arguments["end_date"])
+        start_day, end_day = _span_from_arguments(arguments)
+        if start_day is not None:
+            changes["start_date"] = start_day
+            changes["end_date"] = end_day
         if arguments.get("ongoing") is not None:
             changes["ongoing"] = bool(arguments["ongoing"])
         if changes:
-            service.update_task(task.id, **changes)
+            try:
+                service.update_task(task.id, **changes)
+            except PlannerError:
+                service.delete_task(task.id)
+                raise
         for text in arguments.get("subtasks") or []:
             service.add_subtask(task.id, str(text))
         for link in arguments.get("links") or []:

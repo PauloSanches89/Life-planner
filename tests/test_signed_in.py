@@ -99,6 +99,102 @@ def test_encrypted_file_hides_the_task_and_reloads_for_that_user(tmp_path, clock
     assert other.load().tasks == []
 
 
+def test_create_task_span_shows_on_every_day_from_start_through_end(service):
+    assistant = Scripted(
+        [
+            {
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "function": {
+                            "name": "create_task",
+                            "arguments": json.dumps(
+                                {"title": "Trip", "start_date": "2026-11-01", "end_date": "2026-11-03"}
+                            ),
+                        },
+                    }
+                ],
+            },
+            {"content": "Trip runs from 1 November through 3 November."},
+        ]
+    )
+    checker = Scripted([{"content": '{"allow": true}'}])
+
+    turn = run_turn(service, "create a task named Trip from 2026-11-01 to 2026-11-03", "summary", assistant, checker)
+
+    assert turn.reply == "Trip runs from 1 November through 3 November."
+    assert service.list_tasks_on(date(2026, 10, 28)) == []
+    assert service.list_tasks_on(date(2026, 11, 4)) == []
+    for day_number in (1, 2, 3):
+        found = service.list_tasks_on(date(2026, 11, day_number))
+        assert [task.title for task in found] == ["Trip"]
+        assert found[0].start_date == date(2026, 11, 1)
+        assert found[0].end_date == date(2026, 11, 3)
+        assert found[0].ongoing is False
+
+
+def test_create_task_with_one_date_uses_that_day_for_both_ends(service):
+    assistant = Scripted(
+        [
+            {
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "function": {
+                            "name": "create_task",
+                            "arguments": json.dumps({"title": "Dentist", "start_date": "2026-11-02"}),
+                        },
+                    }
+                ],
+            },
+            {"content": "Dentist is on 2 November."},
+        ]
+    )
+    checker = Scripted([{"content": '{"allow": true}'}])
+
+    run_turn(service, "create a task named Dentist on 2026-11-02", "summary", assistant, checker)
+
+    found = service.list_tasks_on(date(2026, 11, 2))
+    assert [task.title for task in found] == ["Dentist"]
+    assert found[0].start_date == found[0].end_date == date(2026, 11, 2)
+    assert service.list_tasks_on(date(2026, 10, 28)) == []
+
+
+def test_create_task_with_an_end_before_the_start_is_not_saved(service):
+    assistant = Scripted(
+        [
+            {
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "function": {
+                            "name": "create_task",
+                            "arguments": json.dumps(
+                                {"title": "Backwards", "start_date": "2026-11-03", "end_date": "2026-11-01"}
+                            ),
+                        },
+                    }
+                ],
+            },
+            {"content": "I could not save that span."},
+        ]
+    )
+    checker = Scripted([{"content": '{"allow": true}'}])
+
+    run_turn(
+        service,
+        "create a task named Backwards from 2026-11-03 to 2026-11-01",
+        "summary",
+        assistant,
+        checker,
+    )
+
+    assert service._store.load().tasks == []
+
+
 def test_choose_mode_follows_the_users_words():
     assert choose_mode("read my tasks for today", "summary") == "detailed"
     assert choose_mode("summarize my day", "detailed") == "summary"
