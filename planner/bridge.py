@@ -88,9 +88,8 @@ def _label_for(kind: str, label: str | None) -> str:
 class ViewState:
     """Per-session presentation. The chat and the mode buttons both write it."""
 
-    def __init__(self, maps_key: str = "") -> None:
+    def __init__(self) -> None:
         self.mode = "summary"
-        self.maps_key = maps_key
 
 
 class JsApi:
@@ -278,7 +277,6 @@ class JsApi:
             "can_redo": history.can_redo,
             "mode": self._view.mode,
             "summary": self._service.get_summary(),
-            "maps_key": self._view.maps_key,
         }
 
     def _payload(self, task_id: str | None) -> dict:

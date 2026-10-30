@@ -35,7 +35,9 @@ def main() -> None:
             height=760,
             min_size=(900, 560),
         )
-        webview.start()
+        profile = root / "webview"
+        profile.mkdir(parents=True, exist_ok=True)
+        webview.start(private_mode=False, storage_path=str(profile))
     finally:
         scheduler.stop()
         app.stop()

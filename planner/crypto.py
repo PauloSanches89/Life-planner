@@ -52,6 +52,19 @@ def seal(master_key: bytes, dek: bytes, user_id: str, payload: bytes) -> dict:
     }
 
 
+def seal_local(master_key: bytes, aad: bytes, payload: bytes) -> dict:
+    """Encrypt a small local blob with the master key."""
+    ciphertext, nonce = _encrypt(master_key, payload, aad)
+    return {"nonce": nonce, "ciphertext": ciphertext}
+
+
+def open_local(master_key: bytes, aad: bytes, envelope: dict) -> bytes:
+    try:
+        return _decrypt(master_key, envelope["ciphertext"], envelope["nonce"], aad)
+    except (KeyError, InvalidTag, ValueError) as exc:
+        raise StoreError("Encrypted item could not be opened") from exc
+
+
 def open_payload(master_key: bytes, user_id: str, envelope: dict) -> tuple[bytes, bytes]:
     if envelope.get("userId") != user_id or envelope.get("id") != user_id:
         raise StoreError("Encrypted item is for a different user")

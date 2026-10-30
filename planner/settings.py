@@ -35,7 +35,10 @@ class Settings:
     azure_api_version: str
     azure_assistant_deployment: str
     azure_checker_deployment: str
-    maps_key: str
+    gemini_api_key: str
+    gemini_model: str
+    ollama_base_url: str
+    ollama_model: str
     cosmos_endpoint: str
     cosmos_key: str
     cosmos_database: str
@@ -60,7 +63,10 @@ class Settings:
             azure_api_version=os.environ.get("AZURE_OPENAI_API_VERSION", "").strip() or "2024-10-21",
             azure_assistant_deployment=os.environ.get("AZURE_OPENAI_ASSISTANT_DEPLOYMENT", "").strip(),
             azure_checker_deployment=os.environ.get("AZURE_OPENAI_CHECKER_DEPLOYMENT", "").strip(),
-            maps_key=os.environ.get("GOOGLE_MAPS_API_KEY", "").strip(),
+            gemini_api_key=os.environ.get("GEMINI_API_KEY", "").strip(),
+            gemini_model=os.environ.get("GEMINI_MODEL", "").strip() or "gemini-2.5-flash",
+            ollama_base_url=os.environ.get("OLLAMA_BASE_URL", "").strip() or "http://127.0.0.1:11434",
+            ollama_model=os.environ.get("OLLAMA_MODEL", "").strip(),
             cosmos_endpoint=os.environ.get("COSMOS_ENDPOINT", "").strip(),
             cosmos_key=os.environ.get("COSMOS_KEY", "").strip(),
             cosmos_database=os.environ.get("COSMOS_DATABASE", "").strip(),
@@ -80,6 +86,8 @@ class Settings:
 
     @property
     def chat_configured(self) -> bool:
+        if self.ollama_model or self.gemini_api_key:
+            return True
         return bool(
             self.azure_endpoint
             and self.azure_api_key

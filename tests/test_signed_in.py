@@ -1,5 +1,5 @@
 import json
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -29,7 +29,10 @@ def blank_settings(**overrides) -> Settings:
         azure_api_version="2024-10-21",
         azure_assistant_deployment="",
         azure_checker_deployment="",
-        maps_key="",
+        gemini_api_key="",
+        gemini_model="gemini-2.5-flash",
+        ollama_base_url="http://127.0.0.1:11434",
+        ollama_model="",
         cosmos_endpoint="",
         cosmos_key="",
         cosmos_database="",
@@ -157,6 +160,45 @@ def test_allowed_create_uses_the_requested_name_and_saves_a_summary(service):
     assert "go shopping" in service.get_summary()
 
 
+def test_remembered_login_opens_the_planner_after_a_restart(tmp_path, clock):
+    key = load_master_key("", tmp_path)
+    ui = Path(__file__).resolve().parent.parent / "ui"
+    first = PlannerApp(blank_settings(), tmp_path, clock, key, ui)
+    session_id = first.sign_in_for_tests("auth0|ada", "Ada", remember=True)
+    saved = (tmp_path / "session.json").read_text(encoding="utf-8")
+    assert "Ada" not in saved
+    assert "auth0|ada" not in saved
+
+    clock.set(clock.now() + timedelta(days=29))
+    second = PlannerApp(blank_settings(), tmp_path, clock, key, ui)
+    httpd = second.serve(0)
+    try:
+        status, body = call(httpd.server_address[1], "GET", "/api/session", cookie=session_id)
+        assert status == 200
+        assert body["display_name"] == "Ada"
+        status, _ = call(httpd.server_address[1], "POST", "/logout", cookie=session_id)
+        assert status == 200
+    finally:
+        second.stop()
+
+    assert not (tmp_path / "session.json").exists()
+    third = PlannerApp(blank_settings(), tmp_path, clock, key, ui)
+    assert third.sessions == {}
+
+
+def test_remembered_login_expires_after_thirty_days(tmp_path, clock):
+    key = load_master_key("", tmp_path)
+    ui = Path(__file__).resolve().parent.parent / "ui"
+    first = PlannerApp(blank_settings(), tmp_path, clock, key, ui)
+    first.sign_in_for_tests("auth0|ada", "Ada", remember=True)
+    clock.set(clock.now() + timedelta(days=31))
+
+    second = PlannerApp(blank_settings(), tmp_path, clock, key, ui)
+
+    assert second.sessions == {}
+    assert not (tmp_path / "session.json").exists()
+
+
 def test_authorize_url_uses_the_auth0_host_and_pkce():
     settings = blank_settings(
         auth0_domain="https://tenant.example/",
@@ -206,7 +248,7 @@ def test_http_api_keeps_each_signed_in_user_separate(tmp_path, clock):
         status, chat = call(port, "POST", "/api/chat", {"message": "read my tasks for today"}, ada)
         assert status == 200
         assert chat["ok"] is False
-        assert "Azure OpenAI" in chat["error"]
+        assert "GEMINI_API_KEY" in chat["error"]
 
         page, html, _headers = call_text(port, "GET", "/")
         assert page == 200

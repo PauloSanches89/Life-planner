@@ -252,15 +252,13 @@ function locationField() {
 
 function mapPanel() {
   if (!task.location) return el("p", "empty", "Add a location to preview it on the map.");
-  if (!screen.maps_key) {
-    return el("p", "empty", "Add GOOGLE_MAPS_API_KEY to .env to preview " + task.location + ".");
-  }
   const frame = el("iframe", "map-frame");
-  const query = new URLSearchParams({ key: screen.maps_key, q: task.location });
-  frame.src = "https://www.google.com/maps/embed/v1/place?" + query.toString();
+  const query = new URLSearchParams({ q: task.location, z: "15", output: "embed" });
+  frame.src = "https://maps.google.com/maps?" + query.toString();
   frame.title = "Map of " + task.location;
   frame.loading = "lazy";
   frame.referrerPolicy = "no-referrer-when-downgrade";
+  frame.allowFullscreen = true;
   return frame;
 }
 
