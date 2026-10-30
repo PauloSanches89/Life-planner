@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from enum import Enum
 
@@ -107,6 +107,9 @@ class Document:
     selected_day: date
     tasks: list[Task]
     summary: str = ""
+    intake: dict = field(default_factory=dict)
+    task_notes: dict = field(default_factory=dict)
+    deleted_tasks: dict = field(default_factory=dict)
 
 
 STORE_VERSION = 2
@@ -185,6 +188,9 @@ def document_to_dict(document: Document) -> dict:
         },
         "selectedDay": document.selected_day.isoformat(),
         "summary": document.summary,
+        "intake": document.intake,
+        "taskNotes": document.task_notes,
+        "deletedTasks": document.deleted_tasks,
         "tasks": [task_to_dict(task) for task in document.tasks],
     }
 
@@ -327,6 +333,9 @@ def document_from_dict(data: object) -> Document:
     summary = ""
     if "summary" in raw and raw["summary"] is not None:
         summary = _require_str(raw, "summary", "document")
+    intake = _optional_dict(raw.get("intake"))
+    task_notes = _optional_dict(raw.get("taskNotes", raw.get("task_notes")))
+    deleted_tasks = _optional_dict(raw.get("deletedTasks", raw.get("deleted_tasks")))
     if version == 1:
         selected_day = _require_date(raw, "selected_day", "document")
     else:
@@ -346,4 +355,13 @@ def document_from_dict(data: object) -> Document:
         selected_day=selected_day,
         tasks=[task_from_dict(item) for item in tasks_raw],
         summary=summary,
+        intake=intake,
+        task_notes=task_notes,
+        deleted_tasks=deleted_tasks,
     )
+
+
+def _optional_dict(value: object) -> dict:
+    if not isinstance(value, dict):
+        return {}
+    return {str(key): item for key, item in value.items()}

@@ -19,6 +19,7 @@ from planner.models import (
     InvalidLink,
     InvalidSpan,
     NotFoundError,
+    PlannerError,
     Profile,
     ResourceLink,
     Subtask,
@@ -26,6 +27,7 @@ from planner.models import (
     covers,
     parse_link_kind,
     require_aware,
+    task_from_dict,
 )
 from planner.store import Store
 
@@ -150,6 +152,72 @@ class PlannerService:
     def get_summary(self) -> str:
         with self._lock:
             return self._store.load().summary
+
+    def list_tasks(self) -> list[Task]:
+        with self._lock:
+            return copy.deepcopy(self._store.load().tasks)
+
+    def get_intake(self) -> dict:
+        with self._lock:
+            return copy.deepcopy(self._store.load().intake)
+
+    def set_intake(self, intake: dict) -> None:
+        with self._lock:
+            document = self._store.load()
+            document.intake = copy.deepcopy(intake)
+            self._store.save(document)
+
+    def get_task_notes(self) -> dict[str, str]:
+        with self._lock:
+            return {key: str(value) for key, value in self._store.load().task_notes.items()}
+
+    def set_task_note(self, task_id: str, summary: str) -> None:
+        with self._lock:
+            document = self._store.load()
+            document.task_notes[task_id] = summary.strip()
+            self._store.save(document)
+
+    def remember_deleted(self, snapshot: dict) -> None:
+        task_id = snapshot.get("id")
+        if not isinstance(task_id, str) or not task_id:
+            return
+        with self._lock:
+            document = self._store.load()
+            document.deleted_tasks[task_id] = copy.deepcopy(snapshot)
+            self._store.save(document)
+
+    def list_deleted(self) -> list[dict]:
+        with self._lock:
+            document = self._store.load()
+            items = []
+            for task_id, snapshot in document.deleted_tasks.items():
+                if not isinstance(snapshot, dict):
+                    continue
+                items.append(
+                    {
+                        "id": task_id,
+                        "title": snapshot.get("title") or "",
+                        "start_date": snapshot.get("start_date"),
+                        "end_date": snapshot.get("end_date"),
+                        "note": str(document.task_notes.get(task_id) or ""),
+                    }
+                )
+            return items
+
+    def restore_deleted(self, task_id: str) -> Task:
+        with self._lock:
+            document = self._store.load()
+            raw = document.deleted_tasks.get(task_id)
+            if not isinstance(raw, dict):
+                raise NotFoundError(f"Deleted task not found: {task_id}")
+            if any(task.id == task_id for task in document.tasks):
+                raise PlannerError("That task is already on the planner")
+            before = copy.deepcopy(document.tasks)
+            task = task_from_dict(raw)
+            document.tasks.append(task)
+            document.deleted_tasks.pop(task_id, None)
+            self._persist_tasks(document, before)
+            return copy.deepcopy(task)
 
     def delete_task(self, task_id: str) -> None:
         with self._lock:

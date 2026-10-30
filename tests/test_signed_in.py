@@ -5,6 +5,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 import pytest
+from langchain_core.messages import AIMessage
 
 from planner.assistant import choose_mode, run_turn
 from planner.auth import authorize_url, code_challenge
@@ -43,12 +44,32 @@ def blank_settings(**overrides) -> Settings:
     return Settings(**values)
 
 
-class Scripted:
+class ScriptedModel:
     def __init__(self, messages) -> None:
         self.messages = list(messages)
+        self.seen = []
 
-    def complete(self, messages, tools=None):
+    def bind_tools(self, tools, **kwargs):
+        return self
+
+    def invoke(self, messages):
+        self.seen.append(messages)
         return self.messages.pop(0)
+
+
+def base_decision(ready, reply, intake):
+    return AIMessage(content=json.dumps({"ready": ready, "reply": reply, "intake": intake}))
+
+
+def editor_call(name, args):
+    return AIMessage(
+        content="",
+        tool_calls=[{"name": name, "args": args, "id": "call-1", "type": "tool_call"}],
+    )
+
+
+def reviewer_reply(reply):
+    return AIMessage(content=json.dumps({"reply": reply}))
 
 
 def test_version_1_document_upgrades_to_the_cosmos_shape():
@@ -100,30 +121,27 @@ def test_encrypted_file_hides_the_task_and_reloads_for_that_user(tmp_path, clock
 
 
 def test_create_task_span_shows_on_every_day_from_start_through_end(service):
-    assistant = Scripted(
-        [
-            {
-                "content": None,
-                "tool_calls": [
-                    {
-                        "id": "call-1",
-                        "function": {
-                            "name": "create_task",
-                            "arguments": json.dumps(
-                                {"title": "Trip", "start_date": "2026-11-01", "end_date": "2026-11-03"}
-                            ),
-                        },
-                    }
-                ],
-            },
-            {"content": "Trip runs from 1 November through 3 November."},
-        ]
+    intake = {
+        "action": "create",
+        "title": "Trip",
+        "start_date": "2026-11-01",
+        "end_date": "2026-11-03",
+        "alarm": "none",
+    }
+    base = ScriptedModel([base_decision(True, "", intake)])
+    editor = ScriptedModel([editor_call("create_task", intake)])
+    reviewer = ScriptedModel([reviewer_reply("Trip successfully created on 1 November 2026")])
+
+    turn = run_turn(
+        service,
+        "create a task named Trip from 2026-11-01 to 2026-11-03, no alarm",
+        "summary",
+        base,
+        editor,
+        reviewer,
     )
-    checker = Scripted([{"content": '{"allow": true}'}])
 
-    turn = run_turn(service, "create a task named Trip from 2026-11-01 to 2026-11-03", "summary", assistant, checker)
-
-    assert turn.reply == "Trip runs from 1 November through 3 November."
+    assert turn.reply == "Trip successfully created on 1 November 2026"
     assert service.list_tasks_on(date(2026, 10, 28)) == []
     assert service.list_tasks_on(date(2026, 11, 4)) == []
     for day_number in (1, 2, 3):
@@ -135,26 +153,12 @@ def test_create_task_span_shows_on_every_day_from_start_through_end(service):
 
 
 def test_create_task_with_one_date_uses_that_day_for_both_ends(service):
-    assistant = Scripted(
-        [
-            {
-                "content": None,
-                "tool_calls": [
-                    {
-                        "id": "call-1",
-                        "function": {
-                            "name": "create_task",
-                            "arguments": json.dumps({"title": "Dentist", "start_date": "2026-11-02"}),
-                        },
-                    }
-                ],
-            },
-            {"content": "Dentist is on 2 November."},
-        ]
-    )
-    checker = Scripted([{"content": '{"allow": true}'}])
+    intake = {"action": "create", "title": "Dentist", "start_date": "2026-11-02", "alarm": "none"}
+    base = ScriptedModel([base_decision(True, "", intake)])
+    editor = ScriptedModel([editor_call("create_task", {"title": "Dentist", "start_date": "2026-11-02", "alarm": "none"})])
+    reviewer = ScriptedModel([reviewer_reply("Dentist successfully created on 2 November 2026")])
 
-    run_turn(service, "create a task named Dentist on 2026-11-02", "summary", assistant, checker)
+    run_turn(service, "create a task named Dentist on 2026-11-02, no alarm", "summary", base, editor, reviewer)
 
     found = service.list_tasks_on(date(2026, 11, 2))
     assert [task.title for task in found] == ["Dentist"]
@@ -163,35 +167,27 @@ def test_create_task_with_one_date_uses_that_day_for_both_ends(service):
 
 
 def test_create_task_with_an_end_before_the_start_is_not_saved(service):
-    assistant = Scripted(
-        [
-            {
-                "content": None,
-                "tool_calls": [
-                    {
-                        "id": "call-1",
-                        "function": {
-                            "name": "create_task",
-                            "arguments": json.dumps(
-                                {"title": "Backwards", "start_date": "2026-11-03", "end_date": "2026-11-01"}
-                            ),
-                        },
-                    }
-                ],
-            },
-            {"content": "I could not save that span."},
-        ]
-    )
-    checker = Scripted([{"content": '{"allow": true}'}])
+    intake = {
+        "action": "create",
+        "title": "Backwards",
+        "start_date": "2026-11-03",
+        "end_date": "2026-11-01",
+        "alarm": "none",
+    }
+    base = ScriptedModel([base_decision(True, "", intake)])
+    editor = ScriptedModel([editor_call("create_task", intake)])
+    reviewer = ScriptedModel([reviewer_reply("Backwards successfully created on 3 November 2026")])
 
-    run_turn(
+    turn = run_turn(
         service,
-        "create a task named Backwards from 2026-11-03 to 2026-11-01",
+        "create a task named Backwards from 2026-11-03 to 2026-11-01, no alarm",
         "summary",
-        assistant,
-        checker,
+        base,
+        editor,
+        reviewer,
     )
 
+    assert "success" not in turn.reply.lower()
     assert service._store.load().tasks == []
 
 
@@ -201,59 +197,33 @@ def test_choose_mode_follows_the_users_words():
     assert choose_mode("create a new task named go shopping", "summary") == "summary"
 
 
-def test_checker_blocks_a_delete_the_user_did_not_ask_for(service):
+def test_a_read_request_does_not_edit_a_task(service):
     task = service.create_task("Keep me")
-    assistant = Scripted(
-        [
-            {
-                "content": None,
-                "tool_calls": [
-                    {
-                        "id": "call-1",
-                        "function": {
-                            "name": "delete_task",
-                            "arguments": json.dumps({"task_id": task.id}),
-                        },
-                    }
-                ],
-            },
-            {"content": "I left that task alone."},
-        ]
+    base = ScriptedModel(
+        [base_decision(False, "You have one task: Keep me.", {"action": "answer"})]
     )
-    checker = Scripted([{"content": '{"allow": false, "reason": "You asked me to read tasks, not delete one."}'}])
+    editor = ScriptedModel([])
+    reviewer = ScriptedModel([])
 
-    turn = run_turn(service, "read my tasks for today", "summary", assistant, checker)
+    turn = run_turn(service, "read my tasks for today", "summary", base, editor, reviewer)
 
     assert turn.mode == "detailed"
-    assert turn.reply == "I left that task alone."
+    assert turn.reply == "You have one task: Keep me."
     assert service.get_task(task.id).title == "Keep me"
 
 
 def test_allowed_create_uses_the_requested_name_and_saves_a_summary(service):
-    assistant = Scripted(
-        [
-            {
-                "content": None,
-                "tool_calls": [
-                    {
-                        "id": "call-1",
-                        "function": {
-                            "name": "create_task",
-                            "arguments": json.dumps({"title": "go shopping"}),
-                        },
-                    }
-                ],
-            },
-            {"content": "I created go shopping. What should I add to the list?"},
-        ]
-    )
-    checker = Scripted([{"content": '{"allow": true}'}])
+    intake = {"action": "create", "title": "go shopping", "start_date": "2026-10-28", "alarm": "none"}
+    base = ScriptedModel([base_decision(True, "", intake)])
+    editor = ScriptedModel([editor_call("create_task", intake)])
+    reviewer = ScriptedModel([reviewer_reply("go shopping successfully created on 28 October 2026")])
 
-    turn = run_turn(service, 'create a new task named "go shopping"', "summary", assistant, checker)
+    turn = run_turn(service, 'create a new task named "go shopping" on 2026-10-28, no alarm', "summary", base, editor, reviewer)
 
-    assert turn.reply == "I created go shopping. What should I add to the list?"
+    assert turn.reply == "go shopping successfully created on 28 October 2026"
     assert [task.title for task in service.list_tasks_on(date(2026, 10, 28))] == ["go shopping"]
     assert "go shopping" in service.get_summary()
+    assert "created" in next(iter(service.get_task_notes().values()))
 
 
 def test_remembered_login_opens_the_planner_after_a_restart(tmp_path, clock):

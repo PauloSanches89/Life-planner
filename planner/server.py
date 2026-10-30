@@ -14,7 +14,7 @@ from urllib.parse import parse_qs, urlparse
 
 from planner.alarms import AlarmBook
 from planner.auth import AuthError, authorize_url, code_verifier, exchange_profile
-from planner.assistant import AzureChatClient, GeminiChatClient, OllamaChatClient, run_turn
+from planner.assistant import OLLAMA_KEEP_ALIVE, run_turn
 from planner.bridge import JsApi, ViewState
 from planner.clock import Clock
 from planner.crypto import open_local, seal_local
@@ -290,14 +290,15 @@ class PlannerApp:
                 "ok": False,
                 "error": "Set OLLAMA_MODEL in .env, or GEMINI_API_KEY, or the Azure OpenAI names listed in .env.example.",
             }
-        assistant, checker = self._chat_clients()
+        base, editor, reviewer = self._chat_models()
         try:
             turn = run_turn(
                 self.service_for(session),
                 message.strip(),
                 session.view.mode,
-                assistant,
-                checker,
+                base,
+                editor,
+                reviewer,
             )
         except RuntimeError as exc:
             return 200, {"ok": False, "error": str(exc)}
@@ -306,26 +307,43 @@ class PlannerApp:
         payload["reply"] = turn.reply
         return 200, payload
 
-    def _chat_clients(self):
+    def _chat_models(self):
         if self.settings.ollama_model:
-            client = OllamaChatClient(self.settings.ollama_base_url, self.settings.ollama_model)
-            return client, client
+            from langchain_ollama import ChatOllama
+
+            shared = {
+                "model": self.settings.ollama_model,
+                "base_url": self.settings.ollama_base_url,
+                "temperature": 0.2,
+                "keep_alive": OLLAMA_KEEP_ALIVE,
+            }
+            return ChatOllama(**shared, format="json"), ChatOllama(**shared), ChatOllama(**shared, format="json")
         if self.settings.gemini_api_key:
-            client = GeminiChatClient(self.settings.gemini_api_key, self.settings.gemini_model)
-            return client, client
+            from langchain_google_genai import ChatGoogleGenerativeAI
+
+            def gemini():
+                return ChatGoogleGenerativeAI(
+                    model=self.settings.gemini_model,
+                    google_api_key=self.settings.gemini_api_key,
+                    temperature=0.2,
+                )
+
+            return gemini(), gemini(), gemini()
+        from langchain_openai import AzureChatOpenAI
+
+        def azure(deployment: str) -> AzureChatOpenAI:
+            return AzureChatOpenAI(
+                azure_endpoint=self.settings.azure_endpoint,
+                deployment_name=deployment,
+                openai_api_version=self.settings.azure_api_version,
+                openai_api_key=self.settings.azure_api_key,
+                temperature=0.2,
+            )
+
         return (
-            AzureChatClient(
-                self.settings.azure_endpoint,
-                self.settings.azure_api_key,
-                self.settings.azure_assistant_deployment,
-                self.settings.azure_api_version,
-            ),
-            AzureChatClient(
-                self.settings.azure_endpoint,
-                self.settings.azure_api_key,
-                self.settings.azure_checker_deployment,
-                self.settings.azure_api_version,
-            ),
+            azure(self.settings.azure_assistant_deployment),
+            azure(self.settings.azure_assistant_deployment),
+            azure(self.settings.azure_checker_deployment),
         )
 
     def _session(self, handler: BaseHTTPRequestHandler) -> Session | None:
