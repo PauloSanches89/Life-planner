@@ -131,3 +131,21 @@
 - Delta: Ready stays false until title, `start_date` or `ongoing`, and alarm `none` or a timezone-aware datetime are present. If the editor returns no tool call, the result error is "The editor did not change a task."
 - Why: The working tree does not state a failure.
 - Result: `tests/test_graph.py` is untracked. No scored eval.
+
+### 2026-10-30 — prompt change
+
+- By: user
+- Step: Count today and tomorrow from the system date, and ask when a relative span could start on either day.
+- Target: system, `planner/graph.py`
+- Delta: "Count today, tonight, tomorrow, and yesterday from today, never from selected_day." "If they use a relative span such as the next 3 days, and today and selected_day are different, and they do not say which of those two days to count from, set ready to false and ask."
+- Why: A task for today was dated on the open day, November 3, instead of the system date.
+- Result: eval not rerun
+
+### 2026-10-30 — hard stop
+
+- By: agent
+- Step: Override a today or tomorrow date that the model copied from the open day, and refuse a span until the user picks an anchor.
+- Target: `planner/graph.py`
+- Delta: `_apply_date_policy` sets tomorrow to the day after `service.today()`. An unresolved span stores `date_anchor` `unresolved` and asks "Do you mean from today (...), or from the day open in the planner (...)?"
+- Why: The prompt alone still let the editor save the open day when the user said today.
+- Result: eval not rerun

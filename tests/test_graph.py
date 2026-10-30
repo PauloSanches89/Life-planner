@@ -134,3 +134,91 @@ def test_a_deleted_task_note_lets_the_next_turn_restore_that_task(service):
     assert service.get_task(task.id).title == "Go to Beach"
     assert service.get_task(task.id).start_date == date(2026, 12, 1)
     assert "restored" in service.get_task_notes()[task.id]
+
+
+def test_today_follows_the_system_date_while_another_day_is_open(service):
+    service.set_selected_day(date(2026, 11, 3))
+    intake = {
+        "action": "create",
+        "title": "Pack",
+        "start_date": "2026-11-03",
+        "end_date": "2026-11-03",
+        "alarm": "none",
+    }
+    base = ScriptedModel([base_decision(True, "", intake)])
+    editor = ScriptedModel(
+        [editor_call("create_task", {"title": "Pack", "start_date": "2026-11-03", "end_date": "2026-11-03", "alarm": "none"})]
+    )
+    reviewer = ScriptedModel([reviewer_reply("Pack successfully created on 28 October 2026")])
+
+    turn = run_turn(service, "create a task named Pack for today, no alarm", "summary", base, editor, reviewer)
+
+    assert turn.reply == "Pack successfully created on 28 October 2026"
+    assert [task.title for task in service.list_tasks_on(date(2026, 10, 28))] == ["Pack"]
+    assert service.list_tasks_on(date(2026, 11, 3)) == []
+
+
+def test_tomorrow_is_the_day_after_the_system_date(service):
+    service.set_selected_day(date(2026, 11, 3))
+    intake = {"action": "create", "title": "Pack", "start_date": "2026-11-04", "alarm": "none"}
+    base = ScriptedModel([base_decision(True, "", intake)])
+    editor = ScriptedModel(
+        [editor_call("create_task", {"title": "Pack", "start_date": "2026-11-04", "alarm": "none"})]
+    )
+    reviewer = ScriptedModel([reviewer_reply("Pack successfully created on 29 October 2026")])
+
+    turn = run_turn(service, "make a task named Pack for tomorrow, no alarm", "summary", base, editor, reviewer)
+
+    assert turn.reply == "Pack successfully created on 29 October 2026"
+    found = service.list_tasks_on(date(2026, 10, 29))
+    assert [task.title for task in found] == ["Pack"]
+    assert found[0].start_date == found[0].end_date == date(2026, 10, 29)
+
+
+def test_a_relative_span_asks_which_day_to_count_from(service):
+    service.set_selected_day(date(2026, 11, 10))
+    task = service.create_task("Errand")
+    service.update_task(task.id, start_date=date(2026, 11, 10), end_date=date(2026, 11, 10))
+    base = ScriptedModel([base_decision(True, "", {"action": "delete", "task_id": task.id})])
+
+    turn = run_turn(service, "delete the next 3 days' tasks", "summary", base, ScriptedModel([]), ScriptedModel([]))
+
+    assert "28 October 2026" in turn.reply
+    assert "10 November 2026" in turn.reply
+    assert service.get_task(task.id).title == "Errand"
+    assert service.get_intake()["date_anchor"] == "unresolved"
+
+
+def test_choosing_today_counts_the_span_from_the_system_date(service):
+    service.set_selected_day(date(2026, 11, 10))
+    service.set_intake(
+        {
+            "action": "create",
+            "title": "Pack",
+            "alarm": "none",
+            "date_anchor": "unresolved",
+            "start_date": "2026-11-10",
+            "end_date": "2026-11-12",
+        }
+    )
+    base = ScriptedModel(
+        [
+            base_decision(
+                True,
+                "",
+                {"action": "create", "title": "Pack", "alarm": "none", "start_date": "2026-11-10", "end_date": "2026-11-12"},
+            )
+        ]
+    )
+    editor = ScriptedModel(
+        [editor_call("create_task", {"title": "Pack", "start_date": "2026-11-10", "end_date": "2026-11-12", "alarm": "none"})]
+    )
+    reviewer = ScriptedModel([reviewer_reply("Pack successfully created on 28 October 2026")])
+
+    turn = run_turn(service, "from today", "summary", base, editor, reviewer)
+
+    assert turn.reply == "Pack successfully created on 28 October 2026"
+    found = service.list_tasks_on(date(2026, 10, 28))
+    assert [task.title for task in found] == ["Pack"]
+    assert found[0].start_date == date(2026, 10, 28)
+    assert found[0].end_date == date(2026, 11, 12)

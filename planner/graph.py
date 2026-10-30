@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from datetime import date, datetime
+import re
+from datetime import date, datetime, timedelta
 from typing import Literal
 
 from langchain.tools import tool
@@ -29,6 +30,14 @@ BASE_PROMPT = (
     "For restore, set task_id of the deleted task they named, using the notes and the deleted list. "
     "For a question or a request to read tasks, set action to answer, ready to false, and put the answer in reply. "
     "Do not invent a title, a date, or an alarm time. "
+    "today in the planner JSON is the system date. selected_day is only the day open in the window. "
+    "Count today, tonight, tomorrow, and yesterday from today, never from selected_day. "
+    "Tomorrow is the day after today. "
+    "If the user names a calendar date, use that date. "
+    "If they use a relative span such as the next 3 days, and today and selected_day are different, "
+    "and they do not say which of those two days to count from, set ready to false and ask. "
+    "Name both dates in that question. "
+    "When today and selected_day are the same day, count that span from today. "
     "Leave reply empty when ready is true."
 )
 
@@ -36,7 +45,8 @@ EDITOR_PROMPT = (
     "Apply the collected intake by calling one tool. "
     "Use only the values in the intake. Do not invent titles, dates, or times. "
     "Do not write a message to the user. "
-    "create calls create_task, update calls update_task, delete calls delete_task, and restore calls restore_task."
+    "create calls create_task, update calls update_task, delete calls delete_task, and restore calls restore_task. "
+    "Copy start_date and end_date from the intake. Do not replace them with selected_day."
 )
 
 REVIEWER_PROMPT = (
@@ -98,6 +108,7 @@ def compile_planner(service: PlannerService, base, editor, reviewer):
 
     def base_node(state: PlannerState) -> dict:
         context = {
+            "today": service.today().isoformat(),
             "selected_day": service.get_selected_day().isoformat(),
             "mode": state.get("mode") or "summary",
             "tasks": _compact_tasks(service),
@@ -111,7 +122,12 @@ def compile_planner(service: PlannerService, base, editor, reviewer):
                 HumanMessage(content=state.get("user_text") or ""),
             ]
         )
-        return _base_decision(message_text(message), state.get("intake") or {}, service)
+        return _base_decision(
+            message_text(message),
+            state.get("user_text") or "",
+            state.get("intake") or {},
+            service,
+        )
 
     def editor_node(state: PlannerState) -> dict:
         bucket.clear()
@@ -121,6 +137,8 @@ def compile_planner(service: PlannerService, base, editor, reviewer):
             HumanMessage(
                 content=json.dumps(
                     {
+                        "today": service.today().isoformat(),
+                        "selected_day": service.get_selected_day().isoformat(),
                         "intake": state.get("intake") or {},
                         "tasks": _compact_tasks(service),
                         "deleted": service.list_deleted(),
@@ -135,8 +153,10 @@ def compile_planner(service: PlannerService, base, editor, reviewer):
             if not calls:
                 break
             messages.append(message)
+            intake = state.get("intake") or {}
             for call in calls:
-                payload = _run_call(by_name, bucket, call, action)
+                args = _dates_from_intake(call.get("args") or {}, intake)
+                payload = _run_call(by_name, bucket, {**call, "args": args}, action)
                 messages.append(ToolMessage(content=payload, tool_call_id=call.get("id") or "call"))
             if bucket:
                 break
@@ -181,10 +201,13 @@ def _after_base(state: PlannerState) -> Literal["editor", "__end__"]:
     return END
 
 
-def _base_decision(content: str, previous: dict, service: PlannerService) -> dict:
+def _base_decision(content: str, user_text: str, previous: dict, service: PlannerService) -> dict:
     payload = _parse_json(content) or {}
     incoming = _clean_intake(payload.get("intake"))
     intake = _merge_intake(previous, incoming)
+    question = _apply_date_policy(user_text, intake, service.today(), service.get_selected_day())
+    if question:
+        return {"intake": intake, "ready": False, "reply": question}
     action = str(intake.get("action") or "")
     gap = _missing(intake, {item["id"] for item in service.list_deleted()})
     reply = payload.get("reply") if isinstance(payload.get("reply"), str) else ""
@@ -197,6 +220,106 @@ def _base_decision(content: str, previous: dict, service: PlannerService) -> dic
     if payload.get("ready") is True or not reply:
         reply = gap or "What would you like to change?"
     return {"intake": intake, "ready": False, "reply": reply}
+
+
+def _apply_date_policy(user_text: str, intake: dict, today: date, selected: date) -> str | None:
+    """Pin today and tomorrow to the system date. Ask when a span could start on either day."""
+    text = user_text.lower()
+    if intake.get("date_anchor") == "unresolved":
+        if _pins_selected(text) and not _pins_system(text):
+            intake["date_anchor"] = "selected"
+            _fill_anchor_start(intake, selected, today)
+            return None
+        if _pins_system(text) or _single_day(text) == "today":
+            intake["date_anchor"] = "system"
+            _fill_anchor_start(intake, today, selected)
+            return None
+        return _anchor_question(today, selected)
+    if re.search(r"\d{4}-\d{2}-\d{2}", text) and not _is_span(text):
+        intake["date_anchor"] = "explicit"
+        return None
+    span = _is_span(text)
+    single = _single_day(text)
+    pin_system = _pins_system(text) or single is not None
+    pin_selected = _pins_selected(text)
+    if span and pin_system and pin_selected:
+        intake["date_anchor"] = "unresolved"
+        return _anchor_question(today, selected)
+    if span and pin_system:
+        intake["date_anchor"] = "system"
+        _fill_anchor_start(intake, today, selected)
+        return None
+    if span and pin_selected:
+        intake["date_anchor"] = "selected"
+        _fill_anchor_start(intake, selected, today)
+        return None
+    if span and selected != today:
+        intake["date_anchor"] = "unresolved"
+        return _anchor_question(today, selected)
+    if span:
+        intake["date_anchor"] = "system"
+        _fill_anchor_start(intake, today, selected)
+        return None
+    if single:
+        day = today + timedelta(days={"tomorrow": 1, "yesterday": -1}.get(single, 0))
+        intake["start_date"] = day.isoformat()
+        intake["end_date"] = day.isoformat()
+        intake["ongoing"] = False
+        intake["date_anchor"] = "system"
+    return None
+
+
+def _fill_anchor_start(intake: dict, anchor_day: date, replace: date | None = None) -> None:
+    current = str(intake.get("start_date") or "")
+    if not current or (replace is not None and current == replace.isoformat()):
+        intake["start_date"] = anchor_day.isoformat()
+
+
+def _anchor_question(today: date, selected: date) -> str:
+    return (
+        f"Do you mean from today ({_spoken_day(today.isoformat())}), "
+        f"or from the day open in the planner ({_spoken_day(selected.isoformat())})?"
+    )
+
+
+def _is_span(text: str) -> bool:
+    return bool(re.search(r"\b(next|upcoming|following|coming)\b.{0,40}\bday", text))
+
+
+def _single_day(text: str) -> str | None:
+    if re.search(r"\btonight\b", text):
+        return "today"
+    for word in ("tomorrow", "yesterday", "today"):
+        if re.search(rf"\b{word}\b", text):
+            return word
+    return None
+
+
+def _pins_system(text: str) -> bool:
+    return bool(re.search(r"\b(from today|from now|current date|system date)\b", text))
+
+
+def _pins_selected(text: str) -> bool:
+    return bool(
+        re.search(
+            r"\b(selected day|selected date|open day|day open|day i'm viewing|day i am viewing|day i'm editing|day i am editing)\b",
+            text,
+        )
+    )
+
+
+def _dates_from_intake(args: dict, intake: dict) -> dict:
+    if intake.get("date_anchor") not in ("system", "selected", "explicit"):
+        return args
+    start = intake.get("start_date")
+    if not isinstance(start, str) or not start:
+        return args
+    copied = dict(args)
+    copied["start_date"] = start
+    end = intake.get("end_date")
+    if isinstance(end, str) and end:
+        copied["end_date"] = end
+    return copied
 
 
 def _missing(intake: dict, deleted_ids: set[str]) -> str | None:
@@ -260,7 +383,17 @@ def _clean_intake(raw) -> dict:
     if not isinstance(raw, dict):
         return {}
     cleaned = {}
-    for key in ("action", "task_id", "title", "start_date", "end_date", "description", "location", "alarm"):
+    for key in (
+        "action",
+        "task_id",
+        "title",
+        "start_date",
+        "end_date",
+        "description",
+        "location",
+        "alarm",
+        "date_anchor",
+    ):
         value = raw.get(key)
         if isinstance(value, str):
             cleaned[key] = value.strip()

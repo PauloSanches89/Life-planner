@@ -8,3 +8,4 @@ __pycache__/
 dist/
 build/
 _window_check.py
+TODO.md
