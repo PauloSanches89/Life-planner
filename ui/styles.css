@@ -94,6 +94,23 @@ select:focus-visible {
   font-weight: 650;
 }
 
+.topbar-day {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.day-step {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid #d9dee7;
+  border-radius: 8px;
+  background: #fff;
+  font-size: 18px;
+  line-height: 1;
+}
+
 .topbar-day label {
   position: absolute;
   width: 1px;
@@ -426,8 +443,7 @@ textarea,
   padding: 6px 10px;
 }
 
-.tab.selected,
-button[aria-pressed="true"] {
+.tab.selected {
   border-color: #1f6feb;
   background: #f5f8ff;
 }

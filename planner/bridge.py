@@ -144,15 +144,6 @@ class JsApi:
 
         return _invoke(action)
 
-    def set_view_mode(self, mode):
-        def action():
-            if mode not in {"summary", "detailed"}:
-                raise ValueError("mode must be summary or detailed")
-            self._view.mode = mode
-            return self._payload(None)
-
-        return _invoke(action)
-
     def delete_task(self, task_id):
         def action():
             self._service.delete_task(task_id)

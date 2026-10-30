@@ -28,7 +28,6 @@ function api() {
     redo: (id) => rpc("redo", id),
     drain_alarm_events: () => rpc("drain_alarm_events"),
     open_link: (url) => rpc("open_link", url),
-    set_view_mode: (mode) => rpc("set_view_mode", mode),
   };
 }
 
@@ -105,8 +104,6 @@ function render() {
     avatar.style.backgroundImage = "";
     avatar.textContent = initial;
   }
-  document.getElementById("mode-summary").setAttribute("aria-pressed", screen.mode === "summary" ? "true" : "false");
-  document.getElementById("mode-detailed").setAttribute("aria-pressed", screen.mode === "detailed" ? "true" : "false");
   renderCards();
   renderDetail();
   applyFocus();
@@ -450,6 +447,15 @@ async function changeDay() {
   await commit(await api().set_selected_day(value, selectedId), selectedId);
 }
 
+async function shiftDay(days) {
+  const field = document.getElementById("selected-day");
+  if (!field.value) return;
+  const [year, month, day] = field.value.split("-").map(Number);
+  const shifted = new Date(Date.UTC(year, month - 1, day + days));
+  field.value = shifted.toISOString().slice(0, 10);
+  await changeDay();
+}
+
 async function saveTitle(id, value) {
   await commit(await api().update_task(id, value, null, null, null, null), id);
 }
@@ -460,10 +466,6 @@ async function saveDescription(id, value) {
 
 async function saveLocation(id, value) {
   await commit(await api().update_task(id, null, null, null, null, null, value), id);
-}
-
-async function setMode(mode) {
-  take(await api().set_view_mode(mode));
 }
 
 async function saveSpan() {
@@ -615,8 +617,6 @@ function onKey(event) {
 document.getElementById("new-task").addEventListener("click", () => run(createTask));
 document.getElementById("undo").addEventListener("click", () => run(undo));
 document.getElementById("redo").addEventListener("click", () => run(redo));
-document.getElementById("mode-summary").addEventListener("click", () => run(() => setMode("summary")));
-document.getElementById("mode-detailed").addEventListener("click", () => run(() => setMode("detailed")));
 document.getElementById("logout").addEventListener("click", logout);
 document.getElementById("chat-form").addEventListener("submit", (event) => {
   event.preventDefault();
@@ -626,6 +626,8 @@ document.getElementById("chat-form").addEventListener("submit", (event) => {
   input.value = "";
   run(() => sendChat(message));
 });
+document.getElementById("previous-day").addEventListener("click", () => run(() => shiftDay(-1)));
+document.getElementById("next-day").addEventListener("click", () => run(() => shiftDay(1)));
 document.getElementById("selected-day").addEventListener("change", () => run(changeDay));
 document.getElementById("banner-dismiss").addEventListener("click", () => {
   notices = [];

@@ -40,7 +40,6 @@ RPC_ACTIONS = {
     "redo",
     "drain_alarm_events",
     "open_link",
-    "set_view_mode",
 }
 
 SESSION_MAX_AGE = 30 * 24 * 60 * 60
