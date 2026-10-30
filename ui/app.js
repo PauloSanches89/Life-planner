@@ -6,9 +6,44 @@ let focusTarget = null;
 let notices = [];
 let chain = Promise.resolve();
 let polling = false;
+let detailTab = "details";
+let chatMessages = [];
 
 function api() {
-  return window.pywebview.api;
+  return {
+    snapshot: (id) => rpc("snapshot", id),
+    set_selected_day: (iso, id) => rpc("set_selected_day", iso, id),
+    create_task: () => rpc("create_task"),
+    update_task: (id, title, description, start, end, ongoing, location) =>
+      rpc("update_task", id, title, description, start, end, ongoing, location),
+    delete_task: (id) => rpc("delete_task", id),
+    add_subtask: (id, text) => rpc("add_subtask", id, text),
+    update_subtask: (id, subtaskId, text) => rpc("update_subtask", id, subtaskId, text),
+    delete_subtask: (id, subtaskId) => rpc("delete_subtask", id, subtaskId),
+    add_link: (id, url, kind, label) => rpc("add_link", id, url, kind, label),
+    delete_link: (id, linkId) => rpc("delete_link", id, linkId),
+    add_alarm: (id, when) => rpc("add_alarm", id, when),
+    delete_alarm: (id, alarmId) => rpc("delete_alarm", id, alarmId),
+    undo: (id) => rpc("undo", id),
+    redo: (id) => rpc("redo", id),
+    drain_alarm_events: () => rpc("drain_alarm_events"),
+    open_link: (url) => rpc("open_link", url),
+    set_view_mode: (mode) => rpc("set_view_mode", mode),
+  };
+}
+
+async function rpc(name, ...args) {
+  const response = await fetch("/api/rpc", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, args }),
+  });
+  if (response.status === 401) {
+    showGate(await response.json());
+    return { ok: false, error: "Sign in required" };
+  }
+  return response.json();
 }
 
 function run(action) {
@@ -60,8 +95,18 @@ function render() {
   document.getElementById("undo").disabled = !screen.can_undo;
   document.getElementById("redo").disabled = !screen.can_redo;
   document.getElementById("selected-day").value = screen.selected_day;
-  document.getElementById("profile-name").textContent = screen.user.display_name || "Local user";
-  document.getElementById("avatar").textContent = (screen.user.display_name || "?").slice(0, 1);
+  document.getElementById("profile-name").textContent = screen.user.display_name || "Signed in";
+  const avatar = document.getElementById("avatar");
+  const initial = (screen.user.display_name || "?").slice(0, 1);
+  if (screen.user.avatar_url) {
+    avatar.textContent = "";
+    avatar.style.backgroundImage = "url(" + JSON.stringify(screen.user.avatar_url) + ")";
+  } else {
+    avatar.style.backgroundImage = "";
+    avatar.textContent = initial;
+  }
+  document.getElementById("mode-summary").setAttribute("aria-pressed", screen.mode === "summary" ? "true" : "false");
+  document.getElementById("mode-detailed").setAttribute("aria-pressed", screen.mode === "detailed" ? "true" : "false");
   renderCards();
   renderDetail();
   applyFocus();
@@ -79,6 +124,13 @@ function renderCards() {
       open.append(el("div", "card-span", "Ongoing"));
     } else if (item.start !== item.end) {
       open.append(el("div", "card-span", formatDay(item.start) + " – " + formatDay(item.end)));
+    }
+    if (item.location) open.append(el("div", "card-note", item.location));
+    if (screen.mode === "detailed") {
+      if (item.description) open.append(el("div", "card-note", item.description));
+      (item.subtasks || []).forEach((subtask) => {
+        if (subtask.text) open.append(el("div", "card-note", "• " + subtask.text));
+      });
     }
     open.addEventListener("click", () => run(() => selectTask(item.id)));
     card.append(open);
@@ -133,8 +185,14 @@ function renderDetail() {
   remove.addEventListener("click", () => run(deleteTask));
   titleRow.append(title, remove);
   detail.append(titleRow);
+  detail.append(detailTabs());
+  if (detailTab === "map") {
+    detail.append(mapPanel());
+    return;
+  }
 
   detail.append(section("Description", descriptionField()));
+  detail.append(section("Location", locationField()));
   detail.append(section("Dates", spanFields()));
   detail.append(section("Subtasks", subtaskFields()));
   detail.append(section("Links", linkFields()));
@@ -147,6 +205,63 @@ function section(heading, body) {
   if (body instanceof Node) node.append(body);
   else body.forEach((child) => node.append(child));
   return node;
+}
+
+function detailTabs() {
+  const tabs = el("div", "tabs");
+  tabs.append(tabButton("details", "Details"), tabButton("map", "Map"));
+  return tabs;
+}
+
+function tabButton(id, label) {
+  const button = el("button", "tab" + (detailTab === id ? " selected" : ""), label);
+  button.type = "button";
+  button.addEventListener("click", () => {
+    const taskId = task.id;
+    const location = document.getElementById("task-location");
+    const locationValue = location ? location.value : null;
+    const locationChanged = location && locationValue !== (task.location || "");
+    detailTab = id;
+    if (locationChanged) {
+      run(() => saveLocation(taskId, locationValue));
+      return;
+    }
+    renderDetail();
+  });
+  return button;
+}
+
+function locationField() {
+  const field = el("input");
+  field.id = "task-location";
+  field.type = "text";
+  field.value = task.location || "";
+  field.placeholder = "Place or address";
+  field.setAttribute("aria-label", "Location");
+  field.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") field.blur();
+  });
+  field.addEventListener("blur", () => {
+    if (field.value === (task.location || "")) return;
+    const id = task.id;
+    const value = field.value;
+    run(() => saveLocation(id, value));
+  });
+  return field;
+}
+
+function mapPanel() {
+  if (!task.location) return el("p", "empty", "Add a location to preview it on the map.");
+  if (!screen.maps_key) {
+    return el("p", "empty", "Add GOOGLE_MAPS_API_KEY to .env to preview " + task.location + ".");
+  }
+  const frame = el("iframe", "map-frame");
+  const query = new URLSearchParams({ key: screen.maps_key, q: task.location });
+  frame.src = "https://www.google.com/maps/embed/v1/place?" + query.toString();
+  frame.title = "Map of " + task.location;
+  frame.loading = "lazy";
+  frame.referrerPolicy = "no-referrer-when-downgrade";
+  return frame;
 }
 
 function descriptionField() {
@@ -342,7 +457,15 @@ async function saveTitle(id, value) {
 }
 
 async function saveDescription(id, value) {
-  await commit(await api().update_task(id, null, value, null, null, null), id);
+  await commit(await api().update_task(id, null, value, null, null, null, null), id);
+}
+
+async function saveLocation(id, value) {
+  await commit(await api().update_task(id, null, null, null, null, null, value), id);
+}
+
+async function setMode(mode) {
+  take(await api().set_view_mode(mode));
 }
 
 async function saveSpan() {
@@ -494,6 +617,17 @@ function onKey(event) {
 document.getElementById("new-task").addEventListener("click", () => run(createTask));
 document.getElementById("undo").addEventListener("click", () => run(undo));
 document.getElementById("redo").addEventListener("click", () => run(redo));
+document.getElementById("mode-summary").addEventListener("click", () => run(() => setMode("summary")));
+document.getElementById("mode-detailed").addEventListener("click", () => run(() => setMode("detailed")));
+document.getElementById("logout").addEventListener("click", logout);
+document.getElementById("chat-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const input = document.getElementById("chat-input");
+  const message = input.value.trim();
+  if (!message) return;
+  input.value = "";
+  run(() => sendChat(message));
+});
 document.getElementById("selected-day").addEventListener("change", () => run(changeDay));
 document.getElementById("banner-dismiss").addEventListener("click", () => {
   notices = [];
@@ -501,15 +635,86 @@ document.getElementById("banner-dismiss").addEventListener("click", () => {
 });
 document.addEventListener("keydown", onKey);
 
+function showGate(body) {
+  document.getElementById("app").hidden = true;
+  document.getElementById("gate").hidden = false;
+  const missing = document.getElementById("gate-missing");
+  const signIn = document.getElementById("sign-in");
+  const names = body && body.missing ? body.missing : [];
+  if (names.length) {
+    missing.hidden = false;
+    missing.textContent = "Add these to .env before signing in: " + names.join(", ") + ". Accounts are managed at manage.auth0.com.";
+    signIn.hidden = true;
+  } else {
+    missing.hidden = true;
+    signIn.hidden = false;
+  }
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("auth") === "error") {
+    document.getElementById("gate-copy").textContent = "Auth0 did not complete the sign-in. Try again.";
+  }
+}
+
+function renderChat() {
+  const log = document.getElementById("chat-log");
+  log.replaceChildren();
+  if (!chatMessages.length) {
+    log.append(el("p", "chat-empty", "Ask the assistant to read today's tasks, or to create one."));
+    return;
+  }
+  chatMessages.forEach((entry) => {
+    log.append(el("p", "chat-" + entry.role, entry.text));
+  });
+  log.scrollTop = log.scrollHeight;
+}
+
+async function sendChat(message) {
+  chatMessages.push({ role: "user", text: message });
+  renderChat();
+  const response = await fetch("/api/chat", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message }),
+  });
+  if (response.status === 401) {
+    showGate(await response.json());
+    return;
+  }
+  const result = await response.json();
+  if (!result.ok) {
+    chatMessages.push({ role: "assistant", text: result.error || "The assistant could not answer." });
+    renderChat();
+    showError(result.error);
+    return;
+  }
+  chatMessages.push({ role: "assistant", text: result.reply || "Done." });
+  renderChat();
+  take(result);
+}
+
+async function logout() {
+  await fetch("/logout", { method: "POST", credentials: "same-origin" });
+  window.location.href = "/";
+}
+
 let started = false;
 
-function boot() {
+async function boot() {
   if (started) return;
   started = true;
+  const response = await fetch("/api/session", { credentials: "same-origin" });
+  if (response.status === 401) {
+    showGate(await response.json());
+    return;
+  }
+  document.getElementById("gate").hidden = true;
+  document.getElementById("app").hidden = false;
+  renderChat();
   run(async () => {
     take(await api().snapshot(null));
     startPolling();
   });
 }
 
-window.addEventListener("pywebviewready", boot);
+window.addEventListener("DOMContentLoaded", boot);

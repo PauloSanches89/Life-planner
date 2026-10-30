@@ -32,15 +32,20 @@ def _iso_date(value: date | None) -> str | None:
     return None if value is None else value.isoformat()
 
 
-def _task_summary(task: Task) -> dict:
-    return {
+def _task_summary(task: Task, detailed: bool) -> dict:
+    data = {
         "id": task.id,
         "title": task.title,
         "start": _iso_date(task.start_date),
         "end": _iso_date(task.end_date),
         "ongoing": task.ongoing,
+        "location": task.location,
         "links": [_link_dict(link) for link in task.links],
     }
+    if detailed:
+        data["description"] = task.description
+        data["subtasks"] = [_subtask_dict(item) for item in task.subtasks]
+    return data
 
 
 def _subtask_dict(subtask: Subtask) -> dict:
@@ -63,6 +68,7 @@ def _task_dict(task: Task) -> dict:
         "start": _iso_date(task.start_date),
         "end": _iso_date(task.end_date),
         "ongoing": task.ongoing,
+        "location": task.location,
         "created_at": task.created_at.isoformat(),
         "subtasks": [_subtask_dict(item) for item in task.subtasks],
         "links": [_link_dict(link) for link in task.links],
@@ -79,16 +85,26 @@ def _label_for(kind: str, label: str | None) -> str:
     return "Link"
 
 
+class ViewState:
+    """Per-session presentation. The chat and the mode buttons both write it."""
+
+    def __init__(self, maps_key: str = "") -> None:
+        self.mode = "summary"
+        self.maps_key = maps_key
+
+
 class JsApi:
     def __init__(
         self,
         service: PlannerService,
         clock: Clock,
         open_url: Callable[[str], object] | None = None,
+        view: ViewState | None = None,
     ) -> None:
         self._service = service
         self._clock = clock
         self._open_url = webbrowser.open if open_url is None else open_url
+        self._view = view if view is not None else ViewState()
 
     def snapshot(self, task_id=None):
         return _invoke(lambda: self._payload(task_id))
@@ -100,14 +116,14 @@ class JsApi:
 
         return _invoke(action)
 
-    def create_task(self):
+    def create_task(self, title=None):
         def action():
-            task = self._service.create_task()
+            task = self._service.create_task("New task" if title is None else str(title))
             return self._payload(task.id)
 
         return _invoke(action)
 
-    def update_task(self, task_id, title, description, start_date, end_date, ongoing=None):
+    def update_task(self, task_id, title, description, start_date, end_date, ongoing=None, location=None):
         def action():
             changes = {}
             if title is not None:
@@ -122,8 +138,19 @@ class JsApi:
                 if not isinstance(ongoing, bool):
                     raise ValueError("ongoing must be true or false")
                 changes["ongoing"] = ongoing
+            if location is not None:
+                changes["location"] = location
             self._service.update_task(task_id, **changes)
             return self._payload(task_id)
+
+        return _invoke(action)
+
+    def set_view_mode(self, mode):
+        def action():
+            if mode not in {"summary", "detailed"}:
+                raise ValueError("mode must be summary or detailed")
+            self._view.mode = mode
+            return self._payload(None)
 
         return _invoke(action)
 
@@ -242,10 +269,16 @@ class JsApi:
         return {
             "today": self._service.today().isoformat(),
             "selected_day": day.isoformat(),
-            "tasks": [_task_summary(task) for task in self._service.list_tasks_on(day)],
+            "tasks": [
+                _task_summary(task, self._view.mode == "detailed")
+                for task in self._service.list_tasks_on(day)
+            ],
             "user": {"display_name": user.display_name, "avatar_url": user.avatar_url},
             "can_undo": history.can_undo,
             "can_redo": history.can_redo,
+            "mode": self._view.mode,
+            "summary": self._service.get_summary(),
+            "maps_key": self._view.maps_key,
         }
 
     def _payload(self, task_id: str | None) -> dict:

@@ -3,10 +3,11 @@ name = "life-planner"
 version = "0.1.0"
 description = "Local-first planner"
 requires-python = ">=3.14,<3.15"
-dependencies = ["pywebview>=5"]
+dependencies = ["pywebview>=5", "cryptography>=44"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.3", "pyinstaller>=6.16"]
+cloud = ["azure-cosmos>=4.9"]
 
 [build-system]
 requires = ["setuptools>=69"]

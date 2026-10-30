@@ -1,33 +1,44 @@
-"""Open the Life planner window."""
+"""Open the Life planner in a local window and serve the same page over HTTP."""
+
+from pathlib import Path
 
 import webview
 
 from planner.alarms import AlarmScheduler
-from planner.bridge import JsApi
 from planner.clock import SystemClock
-from planner.service import PlannerService
-from planner.store import Store, default_store_root
+from planner.crypto import load_master_key
+from planner.server import PlannerApp
+from planner.settings import Settings, load_dotenv
+from planner.store import default_store_root
 
 
 def main() -> None:
+    root = default_store_root()
+    load_dotenv(Path(__file__).resolve().parent / ".env")
+    settings = Settings.from_env()
     clock = SystemClock()
-    service = PlannerService(Store(default_store_root(), clock), clock)
-    scheduler = AlarmScheduler(service, clock)
-    # A relative path avoids the "#" in this repo path, which the loader would treat as a fragment.
-    page = "ui/index.html"
+    app = PlannerApp(
+        settings,
+        root,
+        clock,
+        load_master_key(settings.data_encryption_key, root),
+        Path(__file__).resolve().parent / "ui",
+    )
+    app.serve()
+    scheduler = AlarmScheduler(app.books, clock)
     scheduler.start()
     try:
         webview.create_window(
             "Life planner",
-            page,
-            js_api=JsApi(service, clock),
-            width=1100,
-            height=720,
-            min_size=(800, 560),
+            f"http://127.0.0.1:{settings.port}/",
+            width=1200,
+            height=760,
+            min_size=(900, 560),
         )
         webview.start()
     finally:
         scheduler.stop()
+        app.stop()
 
 
 if __name__ == "__main__":

@@ -7,34 +7,55 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <div id="banner" class="banner" hidden>
-    <ul id="banner-list"></ul>
-    <button id="banner-dismiss" type="button">Dismiss</button>
-  </div>
-  <header class="topbar">
-    <div class="topbar-actions">
-      <button id="new-task" type="button">New task</button>
-      <button id="undo" type="button">Undo</button>
-      <button id="redo" type="button">Redo</button>
+  <section id="gate" class="gate" hidden>
+    <div class="gate-card">
+      <h1>Life planner</h1>
+      <p id="gate-copy">Sign in with Auth0 to open your planner.</p>
+      <p id="gate-missing" class="form-error" hidden></p>
+      <a id="sign-in" class="sign-in" href="/login">Sign in with Auth0</a>
     </div>
-    <div class="topbar-day">
-      <label for="selected-day">Day</label>
-      <input id="selected-day" type="date">
+  </section>
+  <div id="app" hidden>
+    <div id="banner" class="banner" hidden>
+      <ul id="banner-list"></ul>
+      <button id="banner-dismiss" type="button">Dismiss</button>
     </div>
-    <div class="profile">
-      <span id="profile-name">Local user</span>
-      <span id="avatar" class="avatar" aria-hidden="true">L</span>
+    <header class="topbar">
+      <div class="topbar-actions">
+        <button id="new-task" type="button">New task</button>
+        <button id="undo" type="button">Undo</button>
+        <button id="redo" type="button">Redo</button>
+        <button id="mode-summary" type="button" aria-pressed="true">Summary</button>
+        <button id="mode-detailed" type="button" aria-pressed="false">Detailed</button>
+      </div>
+      <div class="topbar-day">
+        <label for="selected-day">Day</label>
+        <input id="selected-day" type="date">
+      </div>
+      <div class="profile">
+        <span id="profile-name">Local user</span>
+        <span id="avatar" class="avatar" aria-hidden="true">L</span>
+        <button id="logout" type="button">Log out</button>
+      </div>
+    </header>
+    <p id="form-error" class="form-error" hidden></p>
+    <div class="workspace">
+      <aside class="task-column">
+        <div id="task-list" class="task-list"></div>
+        <footer id="task-count" class="task-count">Total tasks for today: 0</footer>
+      </aside>
+      <main id="detail" class="detail">
+        <p class="empty">Loading…</p>
+      </main>
+      <aside class="chat">
+        <h2>Assistant</h2>
+        <div id="chat-log" class="chat-log"></div>
+        <form id="chat-form" class="chat-form">
+          <input id="chat-input" type="text" placeholder="Ask about today's tasks" aria-label="Message the assistant">
+          <button type="submit">Send</button>
+        </form>
+      </aside>
     </div>
-  </header>
-  <p id="form-error" class="form-error" hidden></p>
-  <div class="workspace">
-    <aside class="task-column">
-      <div id="task-list" class="task-list"></div>
-      <footer id="task-count" class="task-count">Total tasks for today: 0</footer>
-    </aside>
-    <main id="detail" class="detail">
-      <p class="empty">Loading…</p>
-    </main>
   </div>
   <script src="app.js"></script>
 </body>

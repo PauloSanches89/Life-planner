@@ -49,6 +49,14 @@ class PlannerService:
         with self._lock:
             return self._identity.current_user()
 
+    def remember_profile(self, profile: Profile) -> None:
+        with self._lock:
+            document = self._store.load()
+            if document.profile == profile:
+                return
+            document.profile = profile
+            self._store.save(document)
+
     def today(self) -> date:
         return require_aware(self._clock.now()).date()
 
@@ -73,13 +81,14 @@ class PlannerService:
         with self._lock:
             return copy.deepcopy(self._find(self._store.load(), task_id))
 
-    def create_task(self) -> Task:
+    def create_task(self, title: str = "New task") -> Task:
+        cleaned = title.strip() or "New task"
         with self._lock:
             document = self._store.load()
             before = copy.deepcopy(document.tasks)
             task = Task(
                 id=str(uuid4()),
-                title="New task",
+                title=cleaned,
                 description="",
                 start_date=document.selected_day,
                 end_date=document.selected_day,
@@ -102,6 +111,7 @@ class PlannerService:
         start_date: date | None = None,
         end_date: date | None = None,
         ongoing: bool | None = None,
+        location: str | None = None,
     ) -> Task:
         with self._lock:
             document = self._store.load()
@@ -122,11 +132,24 @@ class PlannerService:
                 task.title = title
             if description is not None:
                 task.description = description
+            if location is not None:
+                task.location = location.strip()
             task.start_date = new_start
             task.end_date = new_end
             task.ongoing = new_ongoing
             self._persist_tasks(document, before)
             return copy.deepcopy(task)
+
+    def set_summary(self, summary: str) -> str:
+        with self._lock:
+            document = self._store.load()
+            document.summary = summary.strip()
+            self._store.save(document)
+            return document.summary
+
+    def get_summary(self) -> str:
+        with self._lock:
+            return self._store.load().summary
 
     def delete_task(self, task_id: str) -> None:
         with self._lock:

@@ -89,6 +89,7 @@ class Task:
     links: list[ResourceLink]
     alarms: list[Alarm]
     ongoing: bool = False
+    location: str = ""
 
 
 @dataclass
@@ -105,9 +106,10 @@ class Document:
     profile: Profile
     selected_day: date
     tasks: list[Task]
+    summary: str = ""
 
 
-STORE_VERSION = 1
+STORE_VERSION = 2
 
 
 def covers(task: Task, day: date) -> bool:
@@ -161,6 +163,7 @@ def task_to_dict(task: Task) -> dict:
         "start_date": task.start_date.isoformat() if task.start_date is not None else None,
         "end_date": task.end_date.isoformat() if task.end_date is not None else None,
         "ongoing": task.ongoing,
+        "location": task.location,
         "created_at": task.created_at.isoformat(),
         "subtasks": [subtask_to_dict(item) for item in task.subtasks],
         "links": [link_to_dict(item) for item in task.links],
@@ -169,7 +172,10 @@ def task_to_dict(task: Task) -> dict:
 
 
 def document_to_dict(document: Document) -> dict:
+    """Cosmos item shape. id and userId are the signed-in user's id."""
     return {
+        "id": document.profile.id,
+        "userId": document.profile.id,
         "version": document.version,
         "profile": {
             "id": document.profile.id,
@@ -177,7 +183,8 @@ def document_to_dict(document: Document) -> dict:
             "avatar_url": document.profile.avatar_url,
             "provider": document.profile.provider,
         },
-        "selected_day": document.selected_day.isoformat(),
+        "selectedDay": document.selected_day.isoformat(),
+        "summary": document.summary,
         "tasks": [task_to_dict(task) for task in document.tasks],
     }
 
@@ -281,6 +288,9 @@ def task_from_dict(data: object) -> Task:
     subtasks = [subtask_from_dict(item) for item in subtasks_raw]
     subtasks.sort(key=lambda item: item.position)
     ongoing = _optional_bool(raw, "ongoing", "task")
+    location = ""
+    if "location" in raw and raw["location"] is not None:
+        location = _require_str(raw, "location", "task")
     if ongoing:
         start_date = _optional_date(raw, "start_date", "task")
         end_date = _optional_date(raw, "end_date", "task")
@@ -298,13 +308,15 @@ def task_from_dict(data: object) -> Task:
         links=[link_from_dict(item) for item in links_raw],
         alarms=[alarm_from_dict(item) for item in alarms_raw],
         ongoing=ongoing,
+        location=location,
     )
 
 
 def document_from_dict(data: object) -> Document:
     raw = _require_mapping(data, "document")
-    if raw.get("version") != STORE_VERSION:
-        raise StoreError(f"Unsupported store version: {raw.get('version')}")
+    version = raw.get("version")
+    if version not in (1, STORE_VERSION):
+        raise StoreError(f"Unsupported store version: {version}")
     profile_raw = _require_mapping(raw.get("profile"), "profile")
     avatar = profile_raw.get("avatar_url")
     if avatar is not None and not isinstance(avatar, str):
@@ -312,6 +324,17 @@ def document_from_dict(data: object) -> Document:
     tasks_raw = raw.get("tasks", [])
     if not isinstance(tasks_raw, list):
         raise StoreError("tasks must be a list")
+    summary = ""
+    if "summary" in raw and raw["summary"] is not None:
+        summary = _require_str(raw, "summary", "document")
+    if version == 1:
+        selected_day = _require_date(raw, "selected_day", "document")
+    else:
+        selected_day = _require_date(raw, "selectedDay", "document")
+        user_id = raw.get("userId")
+        profile_id = _require_str(profile_raw, "id", "profile")
+        if user_id is not None and user_id != profile_id:
+            raise StoreError("userId must match profile.id")
     return Document(
         version=STORE_VERSION,
         profile=Profile(
@@ -320,6 +343,7 @@ def document_from_dict(data: object) -> Document:
             avatar_url=avatar,
             provider=_require_str(profile_raw, "provider", "profile"),
         ),
-        selected_day=_require_date(raw, "selected_day", "document"),
+        selected_day=selected_day,
         tasks=[task_from_dict(item) for item in tasks_raw],
+        summary=summary,
     )
