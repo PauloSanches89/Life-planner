@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import subprocess
 import threading
+import time
 from datetime import date
 from typing import Protocol
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from planner.models import PlannerError, task_to_dict
@@ -238,6 +243,64 @@ OLLAMA_KEEP_ALIVE = "2m"
 OLLAMA_REFRESH_SECONDS = 30
 
 
+def ensure_ollama(base_url: str, opener=None, finder=None, popen=None, sleep=None, attempts: int = 40) -> bool:
+    """Start the local Ollama server when this app is the one that needs it."""
+    if not _is_local_ollama(base_url):
+        return False
+    opener = opener or urlopen
+    if _ollama_is_up(base_url, opener):
+        return True
+    executable = (finder or find_ollama)()
+    if not executable:
+        return False
+    kwargs = {
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+        "stdin": subprocess.DEVNULL,
+    }
+    if os.name == "nt":
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
+    try:
+        (popen or subprocess.Popen)([executable, "serve"], **kwargs)
+    except OSError:
+        return False
+    pause = sleep or time.sleep
+    for _ in range(attempts):
+        if _ollama_is_up(base_url, opener):
+            return True
+        pause(0.25)
+    return False
+
+
+def find_ollama() -> str | None:
+    found = shutil.which("ollama")
+    if found:
+        return found
+    local = os.environ.get("LOCALAPPDATA", "")
+    program_files = os.environ.get("ProgramFiles", r"C:\Program Files")
+    for path in (
+        os.path.join(local, "Programs", "Ollama", "ollama.exe"),
+        os.path.join(program_files, "Ollama", "ollama.exe"),
+    ):
+        if path and os.path.isfile(path):
+            return path
+    return None
+
+
+def _is_local_ollama(base_url: str) -> bool:
+    return urlparse(base_url).hostname in {"127.0.0.1", "localhost", "::1"}
+
+
+def _ollama_is_up(base_url: str, opener) -> bool:
+    request = Request(f"{base_url.rstrip('/')}/api/version", method="GET")
+    try:
+        with opener(request, timeout=1) as response:
+            response.read()
+    except (URLError, TimeoutError, OSError):
+        return False
+    return True
+
+
 class OllamaWarmup:
     """Refresh a two-minute Ollama lease while the app is open, then unload on close."""
 
@@ -395,7 +458,10 @@ def _apply(service: PlannerService, name: str, arguments: dict) -> tuple[str | N
         task = task_to_dict(service.get_task(arguments["task_id"]))
         return arguments["task_id"], False, {"ok": True, "task": task}
     if name == "create_task":
-        task = service.create_task(str(arguments.get("title") or "New task"))
+        task = service.create_task(
+            str(arguments.get("title") or "New task"),
+            str(arguments.get("task_id") or "") or None,
+        )
         changes = {}
         if arguments.get("description") is not None:
             changes["description"] = str(arguments["description"])

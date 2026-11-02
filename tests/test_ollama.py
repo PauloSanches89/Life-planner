@@ -3,7 +3,7 @@ import threading
 import time
 from urllib.error import URLError
 
-from planner.assistant import OLLAMA_KEEP_ALIVE, OllamaChatClient, OllamaWarmup
+from planner.assistant import OLLAMA_KEEP_ALIVE, OllamaChatClient, OllamaWarmup, ensure_ollama
 
 
 class ScriptedResponse:
@@ -156,6 +156,49 @@ def test_warmup_refreshes_the_lease_while_the_app_is_open():
     assert calls[-1] == 0
     assert len(calls) == finished
     assert len(calls) >= 3
+
+
+def test_app_start_leaves_a_running_ollama_alone():
+    def opener(request, timeout):
+        return ScriptedResponse({"version": "0.0.0"})
+
+    called = []
+    assert ensure_ollama("http://127.0.0.1:11434", opener, lambda: "ollama", called.append) is True
+    assert called == []
+
+
+def test_app_start_runs_local_ollama_when_it_is_down():
+    probes = {"count": 0}
+
+    def opener(request, timeout):
+        probes["count"] += 1
+        if probes["count"] == 1:
+            raise URLError("connection refused")
+        return ScriptedResponse({"version": "0.0.0"})
+
+    started = []
+
+    def popen(args, **kwargs):
+        started.append(args)
+
+    assert ensure_ollama("http://127.0.0.1:11434", opener, lambda: r"C:\Ollama\ollama.exe", popen, lambda _seconds: None) is True
+    assert started == [[r"C:\Ollama\ollama.exe", "serve"]]
+
+
+def test_app_start_does_not_launch_a_remote_ollama():
+    def opener(request, timeout):
+        raise URLError("connection refused")
+
+    called = []
+    assert ensure_ollama("http://ollama.example:11434", opener, lambda: "ollama", called.append) is False
+    assert called == []
+
+
+def test_app_start_opens_when_ollama_cannot_be_found():
+    def opener(request, timeout):
+        raise URLError("connection refused")
+
+    assert ensure_ollama("http://127.0.0.1:11434", opener, lambda: None, lambda *args, **kwargs: None) is False
 
 
 def test_warmup_opens_the_app_when_ollama_is_down():

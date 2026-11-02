@@ -30,6 +30,6 @@ python main.py
 
 That starts the API at `http://127.0.0.1:8765/` and opens the same address in the desktop window. Open that URL in a browser instead if you are editing the page with Lovable.
 
-With `OLLAMA_MODEL` set, that local model answers and also checks each create, edit, and delete. A refused edit is not saved. Ollama has to be running. Leave the model name empty to use Gemini or the Azure OpenAI deployments in `.env.example` instead.
+With `OLLAMA_MODEL` set, that local model answers and also checks each create, edit, and delete. A refused edit is not saved. If that server is on this machine and is not already running, the app starts it. Leave the model name empty to use Gemini or the Azure OpenAI deployments in `.env.example` instead.
 
 `dist/Life-planner/Life-planner.exe` is an older local-only build. It does not sign in with Auth0 or serve the HTTP API. Use `python main.py` for this version.

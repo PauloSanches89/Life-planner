@@ -5,7 +5,7 @@ from pathlib import Path
 import webview
 
 from planner.alarms import AlarmScheduler
-from planner.assistant import OllamaWarmup
+from planner.assistant import OllamaWarmup, ensure_ollama
 from planner.clock import SystemClock
 from planner.crypto import load_master_key
 from planner.server import PlannerApp
@@ -30,6 +30,7 @@ def main() -> None:
     scheduler.start()
     warmup = None
     if settings.ollama_model:
+        ensure_ollama(settings.ollama_base_url)
         warmup = OllamaWarmup(settings.ollama_base_url, settings.ollama_model)
         warmup.start()
     try:

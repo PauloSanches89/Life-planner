@@ -10,6 +10,8 @@ from uuid import uuid4
 from planner.clock import Clock
 from planner.history import History, HistoryState
 from planner.identity import AnonymousIdentity, Identity
+
+PENDING_TRANSCRIPT = "pending"
 from planner.models import (
     Alarm,
     AlarmEvent,
@@ -62,6 +64,9 @@ class PlannerService:
     def today(self) -> date:
         return require_aware(self._clock.now()).date()
 
+    def now(self) -> datetime:
+        return require_aware(self._clock.now())
+
     def get_selected_day(self) -> date:
         with self._lock:
             return self._store.load().selected_day
@@ -83,13 +88,16 @@ class PlannerService:
         with self._lock:
             return copy.deepcopy(self._find(self._store.load(), task_id))
 
-    def create_task(self, title: str = "New task") -> Task:
+    def create_task(self, title: str = "New task", task_id: str | None = None) -> Task:
         cleaned = title.strip() or "New task"
+        chosen = (task_id or "").strip() or str(uuid4())
         with self._lock:
             document = self._store.load()
+            if any(task.id == chosen for task in document.tasks):
+                raise PlannerError("That task already exists")
             before = copy.deepcopy(document.tasks)
             task = Task(
-                id=str(uuid4()),
+                id=chosen,
                 title=cleaned,
                 description="",
                 start_date=document.selected_day,
@@ -165,6 +173,28 @@ class PlannerService:
         with self._lock:
             document = self._store.load()
             document.intake = copy.deepcopy(intake)
+            self._store.save(document)
+
+    def get_transcript(self, task_id: str) -> list[dict]:
+        with self._lock:
+            items = self._store.load().task_transcripts.get(task_id) or []
+            return copy.deepcopy(items) if isinstance(items, list) else []
+
+    def append_transcript(self, task_id: str, messages: list[dict], adopt_pending: bool = False) -> None:
+        with self._lock:
+            document = self._store.load()
+            current = list(document.task_transcripts.get(task_id) or [])
+            if adopt_pending and task_id != PENDING_TRANSCRIPT:
+                current = list(document.task_transcripts.pop(PENDING_TRANSCRIPT, [])) + current
+            for message in messages:
+                if not isinstance(message, dict):
+                    continue
+                role = message.get("role")
+                text = str(message.get("text") or "").strip()
+                if role in {"user", "assistant"} and text:
+                    current.append({"role": role, "text": text})
+            if current:
+                document.task_transcripts[task_id] = current[-40:]
             self._store.save(document)
 
     def get_task_notes(self) -> dict[str, str]:

@@ -149,3 +149,102 @@
 - Delta: `_apply_date_policy` sets tomorrow to the day after `service.today()`. An unresolved span stores `date_anchor` `unresolved` and asks "Do you mean from today (...), or from the day open in the planner (...)?"
 - Why: The prompt alone still let the editor save the open day when the user said today.
 - Result: eval not rerun
+
+### 2026-11-02 — readme
+
+- By: user
+- Step: Say that the app starts a local Ollama server that is not already running.
+- Target: `README.md`
+- Delta: "If that server is on this machine and is not already running, the app starts it."
+- Why: Chat failed because Ollama was not running, and the README told the user to start it by hand.
+- Result: No eval was rerun.
+
+### 2026-11-02 — prompt change
+
+- By: user
+- Step: Have the base model decide on the first message whether the user means a new task or an existing one, and read only that task's transcript.
+- Target: system, `planner/graph.py`
+- Delta: "On the first message, decide whether this is a new task or a change to a task already in the list." "A new task uses action create and an empty task_id. The app assigns the id. Do not invent an id." "task_transcript is the earlier conversation about this one task."
+- Why: The model saw only the current sentence, so a later edit could not use what had already been said about that task.
+- Result: eval not rerun
+
+### 2026-11-02 — tool
+
+- By: agent
+- Step: Save each task's chat under the id assigned at the start, and create the task with that same id.
+- Target: tool, `planner/graph.py`
+- Delta: `create_task` takes `task_id`. A new task id is assigned when action is create and no unsaved id exists yet. Later edits load `task_transcript` for that id only.
+- Why: The transcript has to stay on the task the user is changing, including before the task row is saved.
+- Result: eval not rerun
+
+### 2026-11-02 — prompt change
+
+- By: user
+- Step: Stop the base model after two questions, default a missing duration to ongoing, and ask once for an alarm time.
+- Target: system, `planner/graph.py`
+- Delta: "Do not ask a third time. After two questions, set ready to true with the fields you have." "Leave start_date and end_date empty unless the user states a duration." "If they want an alarm but name no time, set alarm to yes and ask once what time to use."
+- Why: The editor never ran when the base model kept asking, or when an alarm had no time.
+- Result: eval not rerun
+
+### 2026-11-02 — tool
+
+- By: user
+- Step: Split saving a task from setting its alarm, links, and location.
+- Target: tool, `planner/graph.py`
+- Delta: `create_task` and `update_task` take the title, description, and duration. `set_alarm`, `add_link`, and `set_location` are separate calls.
+- Why: One tool call was skipping the alarm and the location, and a prose reply was reported as a saved edit.
+- Result: eval not rerun
+
+### 2026-11-02 — hard stop
+
+- By: agent
+- Step: Create the task after two questions, and fail the turn when a required tool call is missing.
+- Target: `planner/graph.py`
+- Delta: `_next_question` returns nothing once `asks` is 2. An alarm left as yes with no time becomes no. `_missing_steps` marks the edit failed unless create or update, and any requested alarm, link, or location, was actually called.
+- Why: The base model could ask forever, and the reviewer could say success when the editor had not called the tools.
+- Result: eval not rerun
+
+### 2026-11-02 — tool
+
+- By: user
+- Step: Treat subtasks as optional on create.
+- Target: tool, `planner/graph.py`
+- Delta: `create_task` accepts a missing subtasks value, or `{}`, and saves the task with no subtasks.
+- Why: Creating "do stuff" failed because the editor sent subtasks as an empty object and the tool required a list.
+- Result: eval not rerun
+
+### 2026-11-02 — prompt change
+
+- By: user
+- Step: Save location with the task tools, and stop telling the editor to call set_location.
+- Target: system, `planner/graph.py`
+- Delta: "Call create_task for a new task, or update_task for an edit, with the title, description, duration, and location."
+- Why: A saved cafe location was reported as missing because the reviewer required a separate set_location call.
+- Result: eval not rerun
+
+### 2026-11-02 — hard stop
+
+- By: user
+- Step: Stop failing a turn when location was saved on create or update.
+- Target: `planner/graph.py`
+- Delta: `_missing_steps` no longer requires `set_location`.
+- Why: The location was already stored by create_task, and the extra check told the user the change did not happen.
+- Result: eval not rerun
+
+### 2026-11-02 — prompt change
+
+- By: agent
+- Step: Tell the editor that a delete or restore is only that one tool.
+- Target: system, `planner/graph.py`
+- Delta: "When action is delete, call only delete_task. When action is restore, call only restore_task."
+- Why: "delete the make tea task" called create_task, which failed with "That task already exists" and the task stayed.
+- Result: eval not rerun
+
+### 2026-11-02 — tool
+
+- By: user
+- Step: Delete or restore the task from the id already in state.
+- Target: tool, `planner/graph.py`
+- Delta: `_required_call` runs `delete_task` or `restore_task` and does not run the model's create or update call.
+- Why: The editor called create_task for "make tea", that call failed because the task existed, and the failed call stopped the delete.
+- Result: eval not rerun
