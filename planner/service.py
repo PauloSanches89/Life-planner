@@ -10,8 +10,6 @@ from uuid import uuid4
 from planner.clock import Clock
 from planner.history import History, HistoryState
 from planner.identity import AnonymousIdentity, Identity
-
-PENDING_TRANSCRIPT = "pending"
 from planner.models import (
     Alarm,
     AlarmEvent,
@@ -180,12 +178,10 @@ class PlannerService:
             items = self._store.load().task_transcripts.get(task_id) or []
             return copy.deepcopy(items) if isinstance(items, list) else []
 
-    def append_transcript(self, task_id: str, messages: list[dict], adopt_pending: bool = False) -> None:
+    def append_transcript(self, task_id: str, messages: list[dict]) -> None:
         with self._lock:
             document = self._store.load()
             current = list(document.task_transcripts.get(task_id) or [])
-            if adopt_pending and task_id != PENDING_TRANSCRIPT:
-                current = list(document.task_transcripts.pop(PENDING_TRANSCRIPT, [])) + current
             for message in messages:
                 if not isinstance(message, dict):
                     continue

@@ -610,29 +610,6 @@ def _pins_selected(text: str) -> bool:
     )
 
 
-def _create_id_from_intake(args: dict, intake: dict) -> dict:
-    task_id = str(intake.get("task_id") or "").strip()
-    if not task_id:
-        return args
-    copied = dict(args)
-    copied["task_id"] = task_id
-    return copied
-
-
-def _dates_from_intake(args: dict, intake: dict) -> dict:
-    if intake.get("date_anchor") not in ("system", "selected", "explicit"):
-        return args
-    start = intake.get("start_date")
-    if not isinstance(start, str) or not start:
-        return args
-    copied = dict(args)
-    copied["start_date"] = start
-    end = intake.get("end_date")
-    if isinstance(end, str) and end:
-        copied["end_date"] = end
-    return copied
-
-
 def _missing(intake: dict, deleted_ids: set[str]) -> str | None:
     action = str(intake.get("action") or "")
     if action == "create":
@@ -729,13 +706,13 @@ def _editor_tools(service: PlannerService, bucket: list[dict]):
     def list_tasks(day: str = "") -> str:
         """List tasks. Pass an ISO date to limit to that day, or leave day empty for every task."""
         arguments = {"day": day} if day else {}
-        _task_id, _summarized, result = _apply(service, "list_tasks", arguments)
+        _task_id, result = _apply(service, "list_tasks", arguments)
         return json.dumps(result)
 
     @tool
     def get_task(task_id: str) -> str:
         """Read one task by id."""
-        _task_id, _summarized, result = _apply(service, "get_task", {"task_id": task_id})
+        _task_id, result = _apply(service, "get_task", {"task_id": task_id})
         return json.dumps(result)
 
     @tool
@@ -766,7 +743,7 @@ def _editor_tools(service: PlannerService, bucket: list[dict]):
             if items:
                 arguments["subtasks"] = items
         try:
-            task_id, _summarized, result = _apply(service, "create_task", arguments)
+            task_id, result = _apply(service, "create_task", arguments)
         except PlannerError as exc:
             return record({"ok": False, "tool": "create_task", "action": "create", "error": str(exc), "task": None})
         if not result.get("ok") or not task_id:
