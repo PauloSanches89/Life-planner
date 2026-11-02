@@ -1,3 +1,29 @@
+:root {
+  --ink: #3f3a4a;
+  --muted: #7d738c;
+  --faint: #a398b0;
+  --page: #f6f1fa;
+  --surface: #fffcff;
+  --wash: #f3eaf8;
+  --line: #e6d9f0;
+  --accent: #d7c6f3;
+  --accent-ink: #3d3260;
+  --accent-deep: #8d74c4;
+  --focus: #b497e0;
+  --mint: #e5f6ee;
+  --mint-ink: #2f6b52;
+  --mint-line: #b7dfc8;
+  --peach: #fff1e4;
+  --peach-ink: #a85a32;
+  --peach-line: #f3c9a8;
+  --blush: #fdecef;
+  --danger: #b85c6a;
+  --danger-line: #f0c4cc;
+  --banner: #fff6ea;
+  --banner-line: #f0d7b8;
+  --map: #ece4f6;
+}
+
 *,
 *::before,
 *::after {
@@ -10,8 +36,8 @@ body {
   display: flex;
   flex-direction: column;
   font-family: "Segoe UI", system-ui, sans-serif;
-  color: #1b1f24;
-  background: #f3f4f6;
+  color: var(--ink);
+  background: var(--page);
 }
 
 button,
@@ -31,11 +57,15 @@ button:disabled {
   cursor: default;
 }
 
+input[type="checkbox"] {
+  accent-color: var(--accent-deep);
+}
+
 button:focus-visible,
 input:focus-visible,
 textarea:focus-visible,
 select:focus-visible {
-  outline: 2px solid #1f6feb;
+  outline: 2px solid var(--focus);
   outline-offset: 1px;
 }
 
@@ -45,8 +75,8 @@ select:focus-visible {
   gap: 16px;
   align-items: center;
   padding: 10px 16px;
-  background: #fff7e8;
-  border-bottom: 1px solid #f0d7a2;
+  background: var(--banner);
+  border-bottom: 1px solid var(--banner-line);
 }
 
 .banner[hidden] {
@@ -62,8 +92,8 @@ select:focus-visible {
 .ghost,
 .add-button,
 .remove {
-  background: #fff;
-  border: 1px solid #d9dee7;
+  background: var(--surface);
+  border: 1px solid var(--line);
   border-radius: 8px;
   padding: 6px 10px;
 }
@@ -75,8 +105,8 @@ select:focus-visible {
   align-items: center;
   gap: 16px;
   padding: 12px 16px;
-  background: #fff;
-  border-bottom: 1px solid #d9dee7;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
 }
 
 .topbar-actions {
@@ -86,8 +116,8 @@ select:focus-visible {
 }
 
 #new-task {
-  background: #1f6feb;
-  color: #fff;
+  background: var(--accent);
+  color: var(--accent-ink);
   border: none;
   border-radius: 8px;
   padding: 8px 14px;
@@ -104,26 +134,113 @@ select:focus-visible {
   width: 36px;
   height: 36px;
   padding: 0;
-  border: 1px solid #d9dee7;
+  border: 1px solid var(--line);
   border-radius: 8px;
-  background: #fff;
+  background: var(--surface);
   font-size: 18px;
   line-height: 1;
 }
 
-.topbar-day label {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
+.day-button {
+  min-width: 168px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 14px;
+  background: var(--surface);
+  font-weight: 650;
 }
 
-#selected-day {
-  border: 1px solid #d9dee7;
-  border-radius: 8px;
-  padding: 8px 10px;
-  background: #fff;
+.day-button.highlighted {
+  border-color: var(--accent-deep);
+  background: var(--wash);
+  box-shadow: inset 0 0 0 1px var(--accent-deep);
+}
+
+.detail.showing-calendar {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.month-calendar {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.month-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.month-title {
+  margin: 0;
+  font-size: 22px;
+}
+
+.month-weekdays,
+.month-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.month-weekday {
+  text-align: center;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.month-grid {
+  flex: 1;
+  grid-auto-rows: 1fr;
+}
+
+.month-day {
+  min-height: 64px;
+  padding: 8px 4px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.month-day.outside {
+  color: var(--faint);
+  background: transparent;
+}
+
+.month-day.today .day-number {
+  color: var(--accent-ink);
+  font-weight: 700;
+}
+
+.month-day.selected {
+  border-color: var(--accent-deep);
+  background: var(--wash);
+  box-shadow: inset 0 0 0 1px var(--accent-deep);
+}
+
+.day-number {
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.day-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent-deep);
 }
 
 .profile {
@@ -139,8 +256,8 @@ select:focus-visible {
   border-radius: 50%;
   display: grid;
   place-items: center;
-  background: #1f6feb center / cover no-repeat;
-  color: #fff;
+  background: var(--accent) center / cover no-repeat;
+  color: var(--accent-ink);
   font-size: 14px;
   font-weight: 650;
 }
@@ -148,8 +265,8 @@ select:focus-visible {
 .form-error {
   margin: 0;
   padding: 8px 16px;
-  color: #b42318;
-  background: #fef3f2;
+  color: var(--danger);
+  background: var(--blush);
 }
 
 .form-error[hidden] {
@@ -180,8 +297,8 @@ select:focus-visible {
 
 .task-column,
 .detail {
-  background: #fff;
-  border: 1px solid #d9dee7;
+  background: var(--surface);
+  border: 1px solid var(--line);
   border-radius: 16px;
   min-height: 0;
 }
@@ -205,15 +322,15 @@ select:focus-visible {
   gap: 8px;
   align-items: flex-start;
   padding: 12px;
-  border: 1px solid #d9dee7;
+  border: 1px solid var(--line);
   border-radius: 14px;
-  background: #fff;
+  background: var(--surface);
 }
 
 .task-card.selected {
-  border-color: #1f6feb;
-  box-shadow: inset 0 0 0 1px #1f6feb;
-  background: #f5f8ff;
+  border-color: var(--accent-deep);
+  box-shadow: inset 0 0 0 1px var(--accent-deep);
+  background: var(--wash);
 }
 
 .card-open {
@@ -232,7 +349,7 @@ select:focus-visible {
 
 .card-span {
   margin-top: 4px;
-  color: #5c6570;
+  color: var(--muted);
   font-size: 13px;
 }
 
@@ -254,19 +371,19 @@ select:focus-visible {
 }
 
 .bubble.drawio {
-  background: #fff1e8;
-  color: #c2410c;
-  border: 1px solid #fdba74;
+  background: var(--peach);
+  color: var(--peach-ink);
+  border: 1px solid var(--peach-line);
 }
 
 .bubble.generic {
-  background: #e8eefc;
-  color: #1f6feb;
-  border: 1px solid #c5d4f7;
+  background: var(--mint);
+  color: var(--mint-ink);
+  border: 1px solid var(--mint-line);
 }
 
 .task-count {
-  border-top: 1px solid #d9dee7;
+  border-top: 1px solid var(--line);
   padding: 12px 14px;
 }
 
@@ -278,7 +395,7 @@ select:focus-visible {
 .empty {
   margin: 48px 0;
   text-align: center;
-  color: #5c6570;
+  color: var(--muted);
 }
 
 .title-row {
@@ -298,13 +415,13 @@ select:focus-visible {
 
 #task-title:hover,
 #task-title:focus {
-  border-color: #d9dee7;
+  border-color: var(--line);
 }
 
 #delete-task {
-  color: #b42318;
-  background: #fff;
-  border: 1px solid #f0c4c0;
+  color: var(--danger);
+  background: var(--blush);
+  border: 1px solid var(--danger-line);
   border-radius: 8px;
   padding: 8px 12px;
 }
@@ -317,7 +434,7 @@ select:focus-visible {
   margin: 0 0 8px;
   font-size: 13px;
   font-weight: 650;
-  color: #5c6570;
+  color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -329,10 +446,10 @@ textarea,
 .link-form select,
 .alarm-form input {
   width: 100%;
-  border: 1px solid #d9dee7;
+  border: 1px solid var(--line);
   border-radius: 8px;
   padding: 8px 10px;
-  background: #fff;
+  background: var(--surface);
 }
 
 #task-description {
@@ -362,7 +479,7 @@ textarea,
   gap: 8px;
   margin-bottom: 10px;
   font-size: 14px;
-  color: #1b1f24;
+  color: var(--ink);
 }
 
 .ongoing-toggle input {
@@ -372,8 +489,8 @@ textarea,
 }
 
 .span-row input:disabled {
-  background: #f3f4f6;
-  color: #8b949e;
+  background: var(--page);
+  color: var(--faint);
 }
 
 .span-row {
@@ -385,7 +502,7 @@ textarea,
   flex-direction: column;
   gap: 4px;
   font-size: 13px;
-  color: #5c6570;
+  color: var(--muted);
 }
 
 .subtask-row,
@@ -411,6 +528,19 @@ textarea,
   margin-top: 4px;
 }
 
+.add-icon {
+  width: 32px;
+  height: 32px;
+  margin-top: 2px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--wash);
+  color: var(--accent-ink);
+  font-size: 18px;
+  line-height: 1;
+}
+
 .record-label {
   flex: 1;
   min-width: 0;
@@ -418,14 +548,14 @@ textarea,
 }
 
 .status {
-  color: #5c6570;
+  color: var(--muted);
   font-size: 13px;
   text-transform: capitalize;
 }
 
 .card-note {
   margin-top: 4px;
-  color: #5c6570;
+  color: var(--muted);
   font-size: 13px;
   word-break: break-word;
 }
@@ -437,15 +567,15 @@ textarea,
 }
 
 .tab {
-  background: #fff;
-  border: 1px solid #d9dee7;
+  background: var(--surface);
+  border: 1px solid var(--line);
   border-radius: 8px;
   padding: 6px 10px;
 }
 
 .tab.selected {
-  border-color: #1f6feb;
-  background: #f5f8ff;
+  border-color: var(--accent-deep);
+  background: var(--wash);
 }
 
 .map-frame {
@@ -453,15 +583,15 @@ textarea,
   height: 360px;
   border: 0;
   border-radius: 12px;
-  background: #eef1f6;
+  background: var(--map);
 }
 
 .chat {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  background: #fff;
-  border: 1px solid #d9dee7;
+  background: var(--surface);
+  border: 1px solid var(--line);
   border-radius: 16px;
   padding: 12px;
 }
@@ -491,11 +621,11 @@ textarea,
 
 .chat-empty,
 .chat-assistant {
-  background: #f3f4f6;
+  background: var(--wash);
 }
 
 .chat-user {
-  background: #e7f0ff;
+  background: var(--mint);
 }
 
 .chat-form {
@@ -506,9 +636,10 @@ textarea,
 
 .chat-form input {
   flex: 1;
-  border: 1px solid #d9dee7;
+  border: 1px solid var(--line);
   border-radius: 8px;
   padding: 8px 10px;
+  background: var(--surface);
 }
 
 @media (max-width: 960px) {
@@ -541,8 +672,8 @@ textarea,
 .chat-form button,
 #logout,
 .sign-in {
-  background: #1f6feb;
-  color: #fff;
+  background: var(--accent);
+  color: var(--accent-ink);
   border: none;
   border-radius: 8px;
   padding: 8px 12px;
@@ -559,8 +690,8 @@ textarea,
 
 .gate-card {
   width: min(420px, 100%);
-  background: #fff;
-  border: 1px solid #d9dee7;
+  background: var(--surface);
+  border: 1px solid var(--line);
   border-radius: 16px;
   padding: 24px;
 }

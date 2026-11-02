@@ -5,6 +5,7 @@ description = "Local-first planner"
 requires-python = ">=3.14,<3.15"
 dependencies = [
     "pywebview>=5",
+    "uvicorn>=0.34",
     "cryptography>=44",
     "langgraph>=1.2",
     "langchain>=1.4",

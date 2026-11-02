@@ -8,6 +8,10 @@ let chain = Promise.resolve();
 let polling = false;
 let detailTab = "details";
 let chatMessages = [];
+let openFields = new Set();
+let openFor = null;
+let showCalendar = false;
+let calendarCursor = null;
 
 function api() {
   return {
@@ -82,9 +86,14 @@ function take(result) {
     showError(result && result.error ? result.error : "Something went wrong");
     return false;
   }
+  const nextId = result.task ? result.task.id : null;
+  if (nextId !== openFor) {
+    openFields.clear();
+    openFor = nextId;
+  }
   screen = result.screen;
   task = result.task;
-  selectedId = task ? task.id : null;
+  selectedId = nextId;
   showError("");
   render();
   return true;
@@ -93,7 +102,11 @@ function take(result) {
 function render() {
   document.getElementById("undo").disabled = !screen.can_undo;
   document.getElementById("redo").disabled = !screen.can_redo;
-  document.getElementById("selected-day").value = screen.selected_day;
+  const dayButton = document.getElementById("selected-day");
+  dayButton.textContent = formatDay(screen.selected_day);
+  dayButton.classList.toggle("highlighted", showCalendar);
+  dayButton.setAttribute("aria-pressed", showCalendar ? "true" : "false");
+  if (showCalendar && !calendarCursor) calendarCursor = screen.selected_day.slice(0, 7);
   document.getElementById("profile-name").textContent = screen.user.display_name || "Signed in";
   const avatar = document.getElementById("avatar");
   const initial = (screen.user.display_name || "?").slice(0, 1);
@@ -117,6 +130,8 @@ function renderCards() {
     const open = el("button", "card-open");
     open.type = "button";
     open.append(el("div", "card-title", item.title || "Untitled"));
+    const when = timeOnDay(item, screen.selected_day);
+    if (when) open.append(el("div", "card-span", when));
     if (item.ongoing) {
       open.append(el("div", "card-span", "Ongoing"));
     } else if (item.start !== item.end) {
@@ -129,7 +144,10 @@ function renderCards() {
         if (subtask.text) open.append(el("div", "card-note", "• " + subtask.text));
       });
     }
-    open.addEventListener("click", () => run(() => selectTask(item.id)));
+    open.addEventListener("click", () => {
+      showCalendar = false;
+      run(() => selectTask(item.id));
+    });
     card.append(open);
 
     const bubbles = el("div", "bubbles");
@@ -153,9 +171,21 @@ function renderCards() {
   document.getElementById("task-count").textContent = "Total tasks for " + when + ": " + count;
 }
 
+function timeOnDay(item, day) {
+  const times = (item.alarms || []).map((alarm) => alarm.fires_at).filter((value) => value.slice(0, 10) === day);
+  if (!times.length) return "";
+  times.sort();
+  return new Date(times[0]).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+}
+
 function renderDetail() {
   const detail = document.getElementById("detail");
+  detail.classList.toggle("showing-calendar", showCalendar);
   detail.replaceChildren();
+  if (showCalendar) {
+    detail.append(monthCalendar());
+    return;
+  }
   if (!task) {
     detail.append(el("p", "empty", "Select a task or create one."));
     return;
@@ -188,12 +218,113 @@ function renderDetail() {
     return;
   }
 
-  detail.append(section("Description", descriptionField()));
-  detail.append(section("Location", locationField()));
+  detail.append(optionalSection("description", "Description", Boolean((task.description || "").trim()), descriptionField));
+  detail.append(optionalSection("location", "Location", Boolean((task.location || "").trim()), locationField));
   detail.append(section("Dates", spanFields()));
-  detail.append(section("Subtasks", subtaskFields()));
-  detail.append(section("Links", linkFields()));
-  detail.append(section("Alarms", alarmFields()));
+  detail.append(optionalSection("subtasks", "Subtasks", task.subtasks.length > 0, subtaskFields));
+  detail.append(optionalSection("links", "Links", task.links.length > 0, linkFields));
+  detail.append(optionalSection("alarms", "Alarms", task.alarms.length > 0, alarmFields));
+}
+
+function monthCalendar() {
+  const [year, month] = calendarCursor.split("-").map(Number);
+  const wrap = el("div", "month-calendar");
+  const header = el("div", "month-header");
+  const previous = el("button", "day-step", "<");
+  previous.type = "button";
+  previous.setAttribute("aria-label", "Previous month");
+  previous.addEventListener("click", () => {
+    calendarCursor = shiftMonth(calendarCursor, -1);
+    render();
+  });
+  const next = el("button", "day-step", ">");
+  next.type = "button";
+  next.setAttribute("aria-label", "Next month");
+  next.addEventListener("click", () => {
+    calendarCursor = shiftMonth(calendarCursor, 1);
+    render();
+  });
+  const title = new Date(year, month - 1, 1).toLocaleDateString(undefined, { month: "long", year: "numeric" });
+  header.append(previous, el("h2", "month-title", title), next);
+
+  const weekdays = el("div", "month-weekdays");
+  for (let index = 0; index < 7; index += 1) {
+    const name = new Date(2026, 5, 7 + index).toLocaleDateString(undefined, { weekday: "short" });
+    weekdays.append(el("div", "month-weekday", name));
+  }
+
+  const grid = el("div", "month-grid");
+  const firstWeekday = new Date(year, month - 1, 1).getDay();
+  const daysInMonth = new Date(year, month, 0).getDate();
+  const total = Math.ceil((firstWeekday + daysInMonth) / 7) * 7;
+  for (let index = 0; index < total; index += 1) {
+    const date = new Date(year, month - 1, index - firstWeekday + 1);
+    const iso = isoFromDate(date);
+    const classes = ["month-day"];
+    if (date.getMonth() !== month - 1) classes.push("outside");
+    if (iso === screen.today) classes.push("today");
+    if (iso === screen.selected_day) classes.push("selected");
+    const button = el("button", classes.join(" "));
+    button.type = "button";
+    button.append(el("span", "day-number", String(date.getDate())));
+    const busy = dayHasTasks(iso);
+    if (busy) button.append(el("span", "day-dot"));
+    button.setAttribute("aria-label", formatDay(iso) + (busy ? ", has tasks" : ""));
+    button.addEventListener("click", () => run(() => selectCalendarDay(iso)));
+    grid.append(button);
+  }
+  wrap.append(header, weekdays, grid);
+  return wrap;
+}
+
+function dayHasTasks(iso) {
+  return (screen.spans || []).some((span) => {
+    if (span.ongoing) return true;
+    if (!span.start) return false;
+    const end = span.end || span.start;
+    return iso >= span.start && iso <= end;
+  });
+}
+
+function isoFromDate(date) {
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return date.getFullYear() + "-" + month + "-" + day;
+}
+
+function shiftMonth(cursor, delta) {
+  const [year, month] = cursor.split("-").map(Number);
+  return isoFromDate(new Date(year, month - 1 + delta, 1)).slice(0, 7);
+}
+
+async function selectCalendarDay(iso) {
+  calendarCursor = iso.slice(0, 7);
+  await commit(await api().set_selected_day(iso, selectedId), selectedId);
+}
+
+function optionalSection(name, heading, filled, body) {
+  if (!filled && !openFields.has(name)) {
+    return section(heading, addIcon("Add " + heading.toLowerCase(), () => revealField(name)));
+  }
+  return section(heading, body());
+}
+
+function addIcon(label, action) {
+  const button = el("button", "add-icon", "+");
+  button.type = "button";
+  button.setAttribute("aria-label", label);
+  button.addEventListener("click", () => run(action));
+  return button;
+}
+
+function revealField(name) {
+  if (name === "subtasks") {
+    return addSubtask();
+  }
+  openFields.add(name);
+  focusTarget = { description: "task-description", location: "task-location", links: "link-url", alarms: "alarm-time" }[name] || null;
+  renderDetail();
+  applyFocus();
 }
 
 function section(heading, body) {
@@ -239,9 +370,13 @@ function locationField() {
     if (event.key === "Enter") field.blur();
   });
   field.addEventListener("blur", () => {
-    if (field.value === (task.location || "")) return;
-    const id = task.id;
     const value = field.value;
+    if (!value.trim()) openFields.delete("location");
+    if (value === (task.location || "")) {
+      if (!value.trim()) renderDetail();
+      return;
+    }
+    const id = task.id;
     run(() => saveLocation(id, value));
   });
   return field;
@@ -263,11 +398,16 @@ function descriptionField() {
   const field = el("textarea");
   field.id = "task-description";
   field.value = task.description;
+  field.placeholder = "Add a description";
   field.setAttribute("aria-label", "Description");
   field.addEventListener("blur", () => {
-    if (field.value === task.description) return;
-    const id = task.id;
     const value = field.value;
+    if (!value.trim()) openFields.delete("description");
+    if (value === task.description) {
+      if (!value.trim()) renderDetail();
+      return;
+    }
+    const id = task.id;
     run(() => saveDescription(id, value));
   });
   return field;
@@ -335,15 +475,33 @@ function subtaskFields() {
     row.append(input, remove);
     wrap.append(row);
   });
-  const add = el("button", "add-button", "Add subtask");
-  add.type = "button";
-  add.addEventListener("click", () => run(addSubtask));
-  wrap.append(add);
+  wrap.append(addIcon("Add subtask", addSubtask));
   return wrap;
 }
 
 function linkFields() {
   const wrap = el("div");
+  if (openFields.has("links")) {
+    wrap.append(linkForm());
+  }
+  task.links.forEach((link) => {
+    const row = el("div", "record-row");
+    row.append(el("span", "record-label", link.label + " · " + link.kind));
+    const remove = el("button", "remove", "Remove");
+    remove.type = "button";
+    remove.addEventListener("click", () => {
+      const id = task.id;
+      const linkId = link.id;
+      run(() => removeLink(id, linkId));
+    });
+    row.append(remove);
+    wrap.append(row);
+  });
+  if (!openFields.has("links")) wrap.append(addIcon("Add link", () => revealField("links")));
+  return wrap;
+}
+
+function linkForm() {
   const form = el("div", "link-form");
   const url = el("input");
   url.id = "link-url";
@@ -367,38 +525,12 @@ function linkFields() {
   add.type = "button";
   add.addEventListener("click", () => run(addLink));
   form.append(url, kind, label, add);
-  wrap.append(form);
-
-  task.links.forEach((link) => {
-    const row = el("div", "record-row");
-    row.append(el("span", "record-label", link.label + " · " + link.kind));
-    const remove = el("button", "remove", "Remove");
-    remove.type = "button";
-    remove.addEventListener("click", () => {
-      const id = task.id;
-      const linkId = link.id;
-      run(() => removeLink(id, linkId));
-    });
-    row.append(remove);
-    wrap.append(row);
-  });
-  return wrap;
+  return form;
 }
 
 function alarmFields() {
   const wrap = el("div");
-  const form = el("div", "alarm-form");
-  const when = el("input");
-  when.id = "alarm-time";
-  when.type = "datetime-local";
-  when.value = screen.selected_day + "T09:00";
-  when.setAttribute("aria-label", "Alarm time");
-  const add = el("button", "add-button", "Add alarm");
-  add.type = "button";
-  add.addEventListener("click", () => run(addAlarm));
-  form.append(when, add);
-  wrap.append(form);
-
+  if (openFields.has("alarms")) wrap.append(alarmForm());
   task.alarms.forEach((alarm) => {
     const row = el("div", "record-row");
     row.dataset.alarmId = alarm.id;
@@ -415,7 +547,22 @@ function alarmFields() {
     row.append(remove);
     wrap.append(row);
   });
+  if (!openFields.has("alarms")) wrap.append(addIcon("Add alarm", () => revealField("alarms")));
   return wrap;
+}
+
+function alarmForm() {
+  const form = el("div", "alarm-form");
+  const when = el("input");
+  when.id = "alarm-time";
+  when.type = "datetime-local";
+  when.value = screen.selected_day + "T09:00";
+  when.setAttribute("aria-label", "Alarm time");
+  const add = el("button", "add-button", "Add alarm");
+  add.type = "button";
+  add.addEventListener("click", () => run(addAlarm));
+  form.append(when, add);
+  return form;
 }
 
 function applyFocus() {
@@ -425,6 +572,9 @@ function applyFocus() {
       input.focus();
       input.select();
     }
+  } else if (focusTarget === "task-description" || focusTarget === "task-location" || focusTarget === "link-url" || focusTarget === "alarm-time") {
+    const input = document.getElementById(focusTarget);
+    if (input) input.focus();
   } else if (focusTarget) {
     const input = document.querySelector('[data-subtask-id="' + CSS.escape(focusTarget) + '"]');
     if (input) input.focus();
@@ -437,23 +587,19 @@ async function selectTask(id) {
 }
 
 async function createTask() {
+  showCalendar = false;
   const result = await api().create_task();
   focusTarget = "title";
   take(result);
 }
 
-async function changeDay() {
-  const value = document.getElementById("selected-day").value;
-  await commit(await api().set_selected_day(value, selectedId), selectedId);
-}
-
 async function shiftDay(days) {
-  const field = document.getElementById("selected-day");
-  if (!field.value) return;
-  const [year, month, day] = field.value.split("-").map(Number);
+  if (!screen || !screen.selected_day) return;
+  const [year, month, day] = screen.selected_day.split("-").map(Number);
   const shifted = new Date(Date.UTC(year, month - 1, day + days));
-  field.value = shifted.toISOString().slice(0, 10);
-  await changeDay();
+  const iso = shifted.toISOString().slice(0, 10);
+  calendarCursor = iso.slice(0, 7);
+  await commit(await api().set_selected_day(iso, selectedId), selectedId);
 }
 
 async function saveTitle(id, value) {
@@ -522,6 +668,7 @@ async function addLink() {
     document.getElementById("link-kind").value,
     document.getElementById("link-label").value
   );
+  if (result.ok) openFields.delete("links");
   await commit(result, selectedId);
 }
 
@@ -531,6 +678,7 @@ async function removeLink(id, linkId) {
 
 async function addAlarm() {
   const result = await api().add_alarm(selectedId, document.getElementById("alarm-time").value);
+  if (result.ok) openFields.delete("alarms");
   await commit(result, selectedId);
 }
 
@@ -628,7 +776,12 @@ document.getElementById("chat-form").addEventListener("submit", (event) => {
 });
 document.getElementById("previous-day").addEventListener("click", () => run(() => shiftDay(-1)));
 document.getElementById("next-day").addEventListener("click", () => run(() => shiftDay(1)));
-document.getElementById("selected-day").addEventListener("change", () => run(changeDay));
+document.getElementById("selected-day").addEventListener("click", () => {
+  if (!screen) return;
+  showCalendar = !showCalendar;
+  if (showCalendar) calendarCursor = screen.selected_day.slice(0, 7);
+  render();
+});
 document.getElementById("banner-dismiss").addEventListener("click", () => {
   notices = [];
   renderBanner();

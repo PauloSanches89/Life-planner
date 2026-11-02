@@ -73,3 +73,9 @@ At launch, a hosted Azure app does not include Ollama. Pick one:
 - Or leave `OLLAMA_MODEL` empty and use Gemini or the Azure OpenAI deployments above.
 
 The decrypted task text for the signed-in user is still what the model receives. The master key and the per-user data key stay out of the prompt.
+
+## 2026-11-02 — the local server is uvicorn
+
+`planner/server.py` now listens with uvicorn instead of `ThreadingHTTPServer`. `python main.py` still binds `127.0.0.1` and the port from `PORT` (default 8765). Chat and the other blocking handlers run in a worker thread so one long model call does not stall the event loop.
+
+A second instance still drops in-flight logins and splits undo. Those records are in the process (`sessions`, `_pending`, and one `PlannerService` per user). Move them to a shared store before running more than one worker.

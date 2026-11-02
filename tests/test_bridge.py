@@ -130,6 +130,21 @@ def test_undo_and_redo_flags_follow_task_and_subtask_edits(clock, tmp_path):
     assert api.snapshot()["screen"]["can_undo"] is True
 
 
+def test_the_day_list_orders_alarms_and_records_spans(clock, tmp_path):
+    api, _service = build(clock, tmp_path)
+    nine = api.create_task("Nine")["task"]["id"]
+    eight = api.create_task("Eight")["task"]["id"]
+    api.create_task("Anytime")
+    api.add_alarm(nine, "2026-10-28T09:00")
+    api.add_alarm(eight, "2026-10-28T08:00")
+    api.update_task(nine, None, None, "2026-10-28", "2026-10-30")
+
+    screen = api.snapshot(None)["screen"]
+
+    assert [item["title"] for item in screen["tasks"]] == ["Eight", "Nine", "Anytime"]
+    assert {"start": "2026-10-28", "end": "2026-10-30", "ongoing": False} in screen["spans"]
+
+
 def test_open_link_allows_only_http_urls(clock, tmp_path):
     opened = []
     api, _service = build(clock, tmp_path, opened)

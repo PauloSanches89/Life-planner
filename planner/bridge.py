@@ -28,6 +28,19 @@ def _link_dict(link: ResourceLink) -> dict:
     }
 
 
+def _day_time(task: Task, day: date) -> tuple:
+    """Earliest alarm on this day sorts first. A task with no time that day sorts after those."""
+    moments = [
+        (alarm.fires_at.hour, alarm.fires_at.minute, alarm.fires_at.second)
+        for alarm in task.alarms
+        if alarm.fires_at.date() == day
+    ]
+    if not moments:
+        return (1, 0, 0, 0, task.title.lower())
+    hour, minute, second = min(moments)
+    return (0, hour, minute, second, task.title.lower())
+
+
 def _iso_date(value: date | None) -> str | None:
     return None if value is None else value.isoformat()
 
@@ -41,6 +54,7 @@ def _task_summary(task: Task, detailed: bool) -> dict:
         "ongoing": task.ongoing,
         "location": task.location,
         "links": [_link_dict(link) for link in task.links],
+        "alarms": [_alarm_dict(alarm) for alarm in task.alarms],
     }
     if detailed:
         data["description"] = task.description
@@ -256,12 +270,19 @@ class JsApi:
         day = self._service.get_selected_day()
         user = self._service.current_user()
         history = self._service.history_state()
+        tasks = self._service.list_tasks_on(day)
+        tasks.sort(key=lambda task: _day_time(task, day))
         return {
             "today": self._service.today().isoformat(),
             "selected_day": day.isoformat(),
-            "tasks": [
-                _task_summary(task, self._view.mode == "detailed")
-                for task in self._service.list_tasks_on(day)
+            "tasks": [_task_summary(task, self._view.mode == "detailed") for task in tasks],
+            "spans": [
+                {
+                    "start": _iso_date(task.start_date),
+                    "end": _iso_date(task.end_date),
+                    "ongoing": task.ongoing,
+                }
+                for task in self._service.list_tasks()
             ],
             "user": {"display_name": user.display_name, "avatar_url": user.avatar_url},
             "can_undo": history.can_undo,

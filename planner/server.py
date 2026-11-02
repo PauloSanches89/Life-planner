@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
+import io
 import json
 import os
 import secrets
+import socket
 import threading
 import time
 import traceback
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+
+import uvicorn
 
 from planner.alarms import AlarmBook
 from planner.auth import AuthError, authorize_url, code_verifier, exchange_profile
@@ -80,6 +84,53 @@ class ActiveBooks:
             book.transition_due_alarms(now, outcome)
 
 
+class _Listener:
+    """The bound address tests read. Uvicorn owns the socket."""
+
+    def __init__(self, address: tuple[str, int]) -> None:
+        self.server_address = address
+
+
+class _Headers:
+    def __init__(self, items: list[tuple[bytes, bytes]]) -> None:
+        grouped: dict[str, list[str]] = {}
+        for key, value in items:
+            name = key.decode("latin-1").lower()
+            grouped.setdefault(name, []).append(value.decode("latin-1"))
+        self._items = {}
+        for name, values in grouped.items():
+            self._items[name] = "; ".join(values) if name == "cookie" else ", ".join(values)
+
+    def get(self, key: str, default: str | None = None) -> str | None:
+        return self._items.get(key.lower(), default)
+
+
+class _Exchange:
+    """Request and response the route methods write, then the ASGI app sends."""
+
+    def __init__(self, path: str, headers: _Headers, body: bytes) -> None:
+        self.path = path
+        self.headers = headers
+        self.rfile = io.BytesIO(body)
+        self.wfile = self
+        self.status = 500
+        self.committed = False
+        self._headers: list[tuple[str, str]] = []
+        self._body = bytearray()
+
+    def send_response(self, status: int, message: str | None = None) -> None:
+        self.status = status
+
+    def send_header(self, key: str, value: str) -> None:
+        self._headers.append((key, value))
+
+    def end_headers(self) -> None:
+        self.committed = True
+
+    def write(self, data: bytes) -> None:
+        self._body.extend(data)
+
+
 class PlannerApp:
     def __init__(self, settings: Settings, root: Path, clock: Clock, master_key: bytes, ui_dir: Path) -> None:
         self.settings = settings
@@ -93,20 +144,63 @@ class PlannerApp:
         self._services: dict[str, PlannerService] = {}
         self._pending: dict[str, tuple[str, float]] = {}
         self._lock = threading.Lock()
-        self._httpd: ThreadingHTTPServer | None = None
+        self._server: uvicorn.Server | None = None
+        self._thread: threading.Thread | None = None
 
-    def serve(self, port: int | None = None) -> ThreadingHTTPServer:
+    def serve(self, port: int | None = None) -> _Listener:
         chosen = self.settings.port if port is None else port
-        httpd = ThreadingHTTPServer(("127.0.0.1", chosen), _handler(self))
-        thread = threading.Thread(target=httpd.serve_forever, name="planner-http", daemon=True)
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            sock.bind(("127.0.0.1", chosen))
+            sock.listen(128)
+            address = sock.getsockname()
+        except OSError:
+            sock.close()
+            raise
+        config = uvicorn.Config(self, host=address[0], port=address[1], log_level="warning", access_log=False)
+        server = uvicorn.Server(config)
+        thread = threading.Thread(target=server.run, kwargs={"sockets": [sock]}, name="planner-http", daemon=True)
         thread.start()
-        self._httpd = httpd
-        return httpd
+        deadline = time.monotonic() + 5
+        while not server.started:
+            if not thread.is_alive() or time.monotonic() > deadline:
+                sock.close()
+                raise RuntimeError("Uvicorn did not start")
+            time.sleep(0.01)
+        self._server = server
+        self._thread = thread
+        return _Listener(address)
 
     def stop(self) -> None:
-        if self._httpd is not None:
-            self._httpd.shutdown()
-            self._httpd.server_close()
+        server = self._server
+        thread = self._thread
+        if server is not None:
+            server.should_exit = True
+        if thread is not None:
+            thread.join(timeout=5)
+        self._server = None
+        self._thread = None
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] == "lifespan":
+            await _lifespan(receive, send)
+            return
+        if scope["type"] != "http":
+            return
+        path = scope.get("path") or "/"
+        query = scope.get("query_string") or b""
+        if query:
+            path = path + "?" + query.decode("latin-1")
+        exchange = _Exchange(path, _Headers(scope.get("headers") or []), await _read_body(receive))
+        await asyncio.to_thread(self._dispatch, scope.get("method") or "GET", exchange)
+        await send(
+            {
+                "type": "http.response.start",
+                "status": exchange.status,
+                "headers": [(key.encode("latin-1"), value.encode("latin-1")) for key, value in exchange._headers],
+            }
+        )
+        await send({"type": "http.response.body", "body": bytes(exchange._body)})
 
     def sign_in_for_tests(self, sub: str, name: str = "Ada", remember: bool = False) -> str:
         session_id = secrets.token_urlsafe(18)
@@ -116,7 +210,7 @@ class PlannerApp:
             self._remember(session_id, session)
         return session_id
 
-    def handle_get(self, handler: BaseHTTPRequestHandler) -> None:
+    def handle_get(self, handler: _Exchange) -> None:
         parsed = urlparse(handler.path)
         if parsed.path == "/login":
             self._login(handler)
@@ -132,7 +226,7 @@ class PlannerApp:
             return
         _send_json(handler, 404, {"ok": False, "error": "Not found"})
 
-    def handle_post(self, handler: BaseHTTPRequestHandler) -> None:
+    def handle_post(self, handler: _Exchange) -> None:
         parsed = urlparse(handler.path)
         if parsed.path == "/logout":
             _read_json(handler)
@@ -171,7 +265,7 @@ class PlannerApp:
     def api_for(self, session: Session) -> JsApi:
         return JsApi(self.service_for(session), self.clock, view=session.view)
 
-    def _login(self, handler: BaseHTTPRequestHandler) -> None:
+    def _login(self, handler: _Exchange) -> None:
         if self.settings.missing_auth():
             _redirect(handler, "/?auth=unconfigured")
             return
@@ -181,7 +275,7 @@ class PlannerApp:
         self._drop_stale_logins()
         _redirect(handler, authorize_url(self.settings, state, verifier))
 
-    def _callback(self, handler: BaseHTTPRequestHandler, query: dict) -> None:
+    def _callback(self, handler: _Exchange, query: dict) -> None:
         state = _one(query, "state")
         code = _one(query, "code")
         pending = self._pending.pop(state, None) if state else None
@@ -203,7 +297,7 @@ class PlannerApp:
         self._remember(session_id, session)
         _redirect(handler, "/", cookie=session_id, max_age=SESSION_MAX_AGE)
 
-    def _logout(self, handler: BaseHTTPRequestHandler) -> None:
+    def _logout(self, handler: _Exchange) -> None:
         session_id = _cookie_value(handler)
         if session_id:
             self.sessions.pop(session_id, None)
@@ -257,7 +351,7 @@ class PlannerApp:
     def _session_path(self) -> Path:
         return self.root / "session.json"
 
-    def _session_status(self, handler: BaseHTTPRequestHandler) -> None:
+    def _session_status(self, handler: _Exchange) -> None:
         session = self._session(handler)
         if session is None:
             _send_json(handler, 401, {"ok": False, "missing": self.settings.missing_auth()})
@@ -346,13 +440,13 @@ class PlannerApp:
             azure(self.settings.azure_checker_deployment),
         )
 
-    def _session(self, handler: BaseHTTPRequestHandler) -> Session | None:
+    def _session(self, handler: _Exchange) -> Session | None:
         session_id = _cookie_value(handler)
         if not session_id:
             return None
         return self.sessions.get(session_id)
 
-    def _static(self, handler: BaseHTTPRequestHandler, name: str) -> None:
+    def _static(self, handler: _Exchange, name: str) -> None:
         path = self.ui_dir / name
         if not path.is_file():
             _send_json(handler, 404, {"ok": False, "error": "Not found"})
@@ -376,32 +470,23 @@ class PlannerApp:
         for key in stale:
             self._pending.pop(key, None)
 
-
-def _handler(app: PlannerApp):
-    class Handler(BaseHTTPRequestHandler):
-        def do_GET(self) -> None:
-            _guard(self, lambda: app.handle_get(self))
-
-        def do_POST(self) -> None:
-            _guard(self, lambda: app.handle_post(self))
-
-        def log_message(self, fmt: str, *args) -> None:
-            return
-
-    def _guard(handler: BaseHTTPRequestHandler, action) -> None:
+    def _dispatch(self, method: str, exchange: _Exchange) -> None:
         try:
-            action()
+            if method == "GET":
+                self.handle_get(exchange)
+            elif method == "POST":
+                self.handle_post(exchange)
+            else:
+                _send_json(exchange, 405, {"ok": False, "error": "Not found"})
         except Exception:
             traceback.print_exc()
-            try:
-                _send_json(handler, 500, {"ok": False, "error": "Server error"})
-            except Exception:
+            if exchange.committed:
                 return
+            exchange._headers.clear()
+            _send_json(exchange, 500, {"ok": False, "error": "Server error"})
 
-    return Handler
 
-
-def _read_json(handler: BaseHTTPRequestHandler) -> dict:
+def _read_json(handler: _Exchange) -> dict:
     length = int(handler.headers.get("Content-Length", "0") or "0")
     if length <= 0:
         return {}
@@ -426,7 +511,7 @@ def _send_json(handler, status: int, payload: dict, clear_cookie: bool = False) 
 
 
 def _redirect(
-    handler: BaseHTTPRequestHandler,
+    handler: _Exchange,
     location: str,
     cookie: str | None = None,
     max_age: int | None = None,
@@ -446,7 +531,7 @@ def _session_cookie(value: str, max_age: int | None = None) -> str:
     return "; ".join(parts)
 
 
-def _cookie_value(handler: BaseHTTPRequestHandler) -> str:
+def _cookie_value(handler: _Exchange) -> str:
     for part in handler.headers.get("Cookie", "").split(";"):
         name, _, value = part.strip().partition("=")
         if name == "planner_session":
@@ -457,3 +542,24 @@ def _cookie_value(handler: BaseHTTPRequestHandler) -> str:
 def _one(query: dict, key: str) -> str:
     values = query.get(key) or []
     return values[0] if values else ""
+
+
+async def _lifespan(receive, send) -> None:
+    while True:
+        message = await receive()
+        if message["type"] == "lifespan.startup":
+            await send({"type": "lifespan.startup.complete"})
+        elif message["type"] == "lifespan.shutdown":
+            await send({"type": "lifespan.shutdown.complete"})
+            return
+
+
+async def _read_body(receive) -> bytes:
+    chunks = []
+    while True:
+        message = await receive()
+        if message["type"] != "http.request":
+            continue
+        chunks.append(message.get("body") or b"")
+        if not message.get("more_body"):
+            return b"".join(chunks)
