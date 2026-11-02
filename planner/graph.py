@@ -38,8 +38,12 @@ BASE_PROMPT = (
     "When those dates are the same day, count the span from today. "
     "task_transcript is the earlier conversation about this task only. "
     "task_state is the saved task when this is an edit. "
-    "A list, such as a shopping list, is a new task. The title is the list name, such as shopping list. "
-    "Each item on the list is a subtask. "
+    "Fill intake to this schema and repair typos so the values are usable. "
+    "action is create, update, delete, or restore. "
+    "title, description, and location are strings. A place named with for, at, or from goes in location. "
+    "subtasks is an array of strings, one item each, even when the user omits commas or misspells a word. "
+    "start_date and end_date are YYYY-MM-DD or empty. "
+    "A list is action create. Its title is the list name, such as shopping list. s hopping means shopping. "
     "Leave reply empty when ready is true."
 )
 
@@ -243,7 +247,6 @@ def _base_decision(content: str, user_text: str, previous: dict, service: Planne
     incoming = _clean_intake(payload.get("intake"))
     previous = _blank_new_task(previous, incoming, service)
     intake = _merge_intake(previous, incoming)
-    _apply_list_request(user_text, intake)
     intake = _assign_task_id(intake, previous, service, user_text)
     question = _apply_date_policy(user_text, intake, service.today(), service.get_selected_day())
     if question:
@@ -376,90 +379,6 @@ def _assign_task_id(intake: dict, previous: dict, service: PlannerService, user_
     return intake
 
 
-_LIST_INTRO = re.compile(
-    r"\b(?:create|make|start|build|add)\s+(?:me\s+)?(?:a|an|my|the)\s+(?P<name>.+?)\s+list\b(?P<tail>.*)$",
-    re.IGNORECASE,
-)
-_LIST_BARE = re.compile(
-    r"\b(?:create|make|start|build)\s+(?:me\s+)?(?:a|an)\s+list\b(?P<tail>.*)$",
-    re.IGNORECASE,
-)
-_LIST_NAMED = re.compile(
-    r"\b(?P<name>.+?)\s+list\s*,?\s*(?:please\s+)?(?:make|create)\s+it\b(?P<tail>.*)$",
-    re.IGNORECASE,
-)
-
-
-def _apply_list_request(user_text: str, intake: dict) -> None:
-    """A shopping list is a task. The items are its subtasks."""
-    found = _parse_list(user_text)
-    if not found:
-        intake.pop("list", None)
-        return
-    intake["action"] = "create"
-    intake["title"] = found["title"]
-    intake["subtasks"] = found["subtasks"]
-    intake["list"] = True
-
-
-def _parse_list(user_text: str) -> dict | None:
-    text = " ".join(user_text.split())
-    if re.search(r"\b(delete|remove|cancel|restore)\b", text, re.IGNORECASE):
-        return None
-    named = _LIST_NAMED.search(text)
-    intro = _LIST_INTRO.search(text)
-    bare = _LIST_BARE.search(text)
-    if named:
-        return {"title": _list_title(named.group("name")), "subtasks": _list_items(named.group("tail"))}
-    if intro:
-        return {"title": _list_title(intro.group("name")), "subtasks": _list_items(intro.group("tail"))}
-    if bare:
-        return {"title": "list", "subtasks": _list_items(bare.group("tail"))}
-    return None
-
-
-def _list_title(name: str) -> str:
-    cleaned = " ".join(name.split()).strip(" .,")
-    cleaned = re.sub(r"^(?:a|an|my|the)\s+", "", cleaned, flags=re.IGNORECASE).strip()
-    if not cleaned:
-        return "list"
-    if cleaned.lower().endswith(" list"):
-        return cleaned
-    return f"{cleaned} list"
-
-
-def _list_items(tail: str) -> list[str]:
-    match = re.match(
-        r"\s*(?:,\s*)?(?:that|which)?\s*(?:has|have|with|containing|including|of)\s+(.+)$",
-        tail.strip(),
-        re.IGNORECASE,
-    )
-    if not match:
-        return []
-    body = re.sub(r"\s+on it\.?$", "", match.group(1).strip(), flags=re.IGNORECASE).strip(" .")
-    return _split_items(body)
-
-
-def _split_items(body: str) -> list[str]:
-    """Split items on commas, spaces, or the word and. A missing comma still separates words."""
-    body = body.strip(" .")
-    if not body:
-        return []
-    head, last = body, ""
-    found = re.search(r"^(?P<head>.*)\s+\band\b\s+(?P<last>.+)$", body, flags=re.IGNORECASE)
-    if found and found.group("head").strip():
-        head = found.group("head").strip(" .,")
-        last = found.group("last").strip(" .")
-    items = []
-    for piece in re.split(r"\s*,\s*|\s+", head):
-        cleaned = piece.strip(" .,")
-        if cleaned and cleaned.lower() != "and":
-            items.append(cleaned)
-    if last:
-        items.append(last)
-    return items
-
-
 def _match_task(user_text: str, tasks: list) -> str:
     text = user_text.lower()
     hits = []
@@ -514,7 +433,6 @@ def _editor_state(service: PlannerService, intake: dict) -> dict:
         "alarm": intake.get("alarm") or "no",
         "links": intake.get("links") or [],
         "subtasks": intake.get("subtasks") if isinstance(intake.get("subtasks"), list) else [],
-        "list": intake.get("list") is True,
     }
     if state["action"] != "update" or not state["task_id"]:
         return state
@@ -535,20 +453,8 @@ def _editor_state(service: PlannerService, intake: dict) -> dict:
 
 
 def _required_call(action: str, state: dict) -> dict | None:
-    """Delete, restore, and a list use the id already chosen. A wrong tool must not run instead."""
+    """Delete and restore use the id already chosen. A create call must not run instead."""
     task_id = str(state.get("task_id") or "").strip()
-    if action == "create" and state.get("list") is True and task_id:
-        args: dict = {"task_id": task_id, "title": state.get("title") or "list"}
-        if state.get("ongoing") is True and not state.get("start_date"):
-            args["ongoing"] = True
-        elif state.get("start_date"):
-            args["start_date"] = state["start_date"]
-            args["end_date"] = state.get("end_date") or state["start_date"]
-            args["ongoing"] = False
-        items = [str(item).strip() for item in (state.get("subtasks") or []) if str(item).strip()]
-        if items:
-            args["subtasks"] = items
-        return {"name": "create_task", "args": args, "id": "create-list", "type": "tool_call"}
     if not task_id:
         return None
     if action == "delete":

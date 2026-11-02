@@ -140,8 +140,15 @@ def test_a_location_on_create_is_saved_without_a_separate_tool(service):
     assert "successfully created" in turn.reply.lower()
 
 
-def test_a_shopping_list_is_a_task_and_the_items_are_subtasks(service):
-    base = ScriptedModel([base_decision(False, "What would you like to change?", {})])
+def test_the_model_schema_saves_each_list_item(service):
+    intake = {
+        "action": "create",
+        "title": "shopping list",
+        "alarm": "no",
+        "subtasks": ["eggs", "cream", "milk"],
+    }
+    base = ScriptedModel([base_decision(True, "", intake)])
+    editor = ScriptedModel([editor_call("create_task", {"title": "shopping list", "ongoing": True})])
     reviewer = ScriptedModel([reviewer_reply("shopping list successfully created, with no end date")])
 
     turn = run_turn(
@@ -149,75 +156,60 @@ def test_a_shopping_list_is_a_task_and_the_items_are_subtasks(service):
         "create a shopping list that has eggs, cream and milk on it",
         "summary",
         base,
-        ScriptedModel([]),
+        editor,
         reviewer,
     )
 
-    saved = service.list_tasks()
-    assert [task.title for task in saved] == ["shopping list"]
-    assert [item.text for item in saved[0].subtasks] == ["eggs", "cream", "milk"]
-    assert saved[0].ongoing is True
+    saved = service.list_tasks()[0]
+    assert saved.title == "shopping list"
+    assert [item.text for item in saved.subtasks] == ["eggs", "cream", "milk"]
+    assert saved.ongoing is True
     assert "successfully created" in turn.reply.lower()
-    assert "what would you like to change" not in turn.reply.lower()
+    assert "subtasks is an array of strings" in base.seen[0][0].content
 
 
-def test_list_items_split_without_commas(service):
-    base = ScriptedModel([base_decision(False, "", {})])
+def test_a_repaired_list_schema_keeps_the_place_and_the_items(service):
+    intake = {
+        "action": "create",
+        "title": "shopping list",
+        "location": "woolworths",
+        "alarm": "no",
+        "subtasks": ["cake", "bread", "popcorn"],
+    }
+    base = ScriptedModel([base_decision(True, "", intake)])
+    editor = ScriptedModel([editor_call("create_task", {"title": "shopping list", "ongoing": True})])
     reviewer = ScriptedModel([reviewer_reply("shopping list successfully created, with no end date")])
 
-    run_turn(
+    turn = run_turn(
         service,
-        "make a shopping list with mil cheese eggs and toilet paper",
+        "make s hopping list for woolworths with cake, bread and popcorn",
         "summary",
         base,
-        ScriptedModel([]),
+        editor,
         reviewer,
     )
 
     saved = service.list_tasks()[0]
-    assert [item.text for item in saved.subtasks] == ["mil", "cheese", "eggs", "toilet paper"]
+    assert saved.title == "shopping list"
+    assert saved.location == "woolworths"
+    assert [item.text for item in saved.subtasks] == ["cake", "bread", "popcorn"]
+    assert "successfully created" in turn.reply.lower()
 
 
-def test_naming_a_list_creates_it_even_when_no_items_were_given(service):
-    base = ScriptedModel(
-        [
-            base_decision(False, "What would you like to change?", {}),
-            base_decision(False, "What would you like to change?", {}),
-        ]
-    )
-    reviewer = ScriptedModel(
-        [
-            reviewer_reply("shopping list successfully created, with no end date"),
-            reviewer_reply("Shopping list successfully created, with no end date"),
-        ]
-    )
-
-    first = run_turn(service, "make a shopping list", "summary", base, ScriptedModel([]), reviewer)
-    second = run_turn(service, "Shopping list, make it", "summary", base, ScriptedModel([]), reviewer)
-
-    assert [task.title for task in service.list_tasks()] == ["shopping list", "Shopping list"]
-    assert service.list_tasks()[0].subtasks == []
-    assert service.list_tasks()[1].subtasks == []
-    assert "successfully created" in first.reply.lower()
-    assert "successfully created" in second.reply.lower()
-
-
-def test_a_list_of_items_uses_list_as_the_task_name(service):
+def test_a_list_sentence_is_not_parsed_when_the_model_leaves_the_schema_empty(service):
     base = ScriptedModel([base_decision(False, "", {})])
-    reviewer = ScriptedModel([reviewer_reply("list successfully created, with no end date")])
 
-    run_turn(
+    turn = run_turn(
         service,
-        "create a list of eggs, cream and milk",
+        "make a shopping list with cake, bread and popcorn",
         "summary",
         base,
         ScriptedModel([]),
-        reviewer,
+        ScriptedModel([]),
     )
 
-    saved = service.list_tasks()[0]
-    assert saved.title == "list"
-    assert [item.text for item in saved.subtasks] == ["eggs", "cream", "milk"]
+    assert service.list_tasks() == []
+    assert "what would you like to change" in turn.reply.lower()
 
 
 def test_editor_prose_without_a_tool_call_is_not_a_saved_task(service):

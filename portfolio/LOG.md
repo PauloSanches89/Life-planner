@@ -275,3 +275,57 @@
 - Delta: `_split_items` separates words on spaces as well as commas. The word "and" is a separator. The words after the last "and" stay one item.
 - Why: "mil cheese eggs and toilet paper" saved "mil cheese eggs" as one subtask because there was no comma.
 - Result: eval not rerun
+
+### 2026-11-02 — model change
+
+- By: user
+- Step: Turn off reasoning for the local chat model.
+- Target: model, `planner/server.py`
+- Delta: `reasoning=False` on the base, editor, and reviewer `ChatOllama` clients.
+- Why: Each chat waited on a full thinking pass before the answer, and a save waited on two or three of those.
+- Result: eval not rerun
+
+### 2026-11-02 — prompt change
+
+- By: user
+- Step: Skip the reviewer model when the tool result is already known.
+- Target: system, `planner/graph.py`
+- Delta: `reviewer_node` returns `factual_reply(outcome)` when `ok` is present and does not call the reviewer.
+- Why: The reply was another Ollama generation after the save had already succeeded or failed.
+- Result: eval not rerun
+
+### 2026-11-02 — prompt change
+
+- By: user
+- Step: Have the base model fill the task schema, including a misspelled list.
+- Target: system, `planner/graph.py`
+- Delta: "Fill intake to this schema and repair typos so the values are usable." "subtasks is an array of strings, one item each." "A place named with for, at, or from goes in location." "s hopping means shopping."
+- Why: "make s hopping list for woolworths with cake, bread and popcorn" did not match the list regex, so the reply was "What would you like to change?"
+- Result: eval not rerun
+
+### 2026-11-02 — tool
+
+- By: user
+- Step: Stop parsing a list sentence with a regex.
+- Target: tool, `planner/graph.py`
+- Delta: Removed `_apply_list_request`, `_parse_list`, and `_split_items`. A create saves the title, location, and subtasks the model put in intake.
+- Why: The regex rejected a list when the wording was not exact, instead of letting the model fit the schema.
+- Result: eval not rerun
+
+### 2026-11-02 — model change
+
+- By: user
+- Step: Turn Ollama reasoning back on.
+- Target: model, `planner/server.py`
+- Delta: Removed `reasoning=False` from the base, editor, and reviewer `ChatOllama` clients.
+- Why: The speed change was abandoned before it was committed.
+- Result: eval not rerun
+
+### 2026-11-02 — prompt change
+
+- By: user
+- Step: Call the reviewer again after a known tool result.
+- Target: system, `planner/graph.py`
+- Delta: `reviewer_node` always calls the reviewer. It no longer returns `factual_reply(outcome)` early.
+- Why: Skipping the reviewer to shorten the wait was abandoned before it was committed.
+- Result: eval not rerun
