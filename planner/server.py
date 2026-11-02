@@ -63,6 +63,16 @@ class Session:
         self.name = name
         self.picture = picture
         self.view = ViewState()
+        self._chat_status = ""
+        self._chat_status_lock = threading.Lock()
+
+    def set_chat_status(self, text: str) -> None:
+        with self._chat_status_lock:
+            self._chat_status = text
+
+    def read_chat_status(self) -> str:
+        with self._chat_status_lock:
+            return self._chat_status
 
 
 class ActiveBooks:
@@ -221,6 +231,9 @@ class PlannerApp:
         if parsed.path == "/api/session":
             self._session_status(handler)
             return
+        if parsed.path == "/api/chat/status":
+            self._chat_activity(handler)
+            return
         if parsed.path in STATIC_FILES:
             self._static(handler, STATIC_FILES[parsed.path])
             return
@@ -351,6 +364,13 @@ class PlannerApp:
     def _session_path(self) -> Path:
         return self.root / "session.json"
 
+    def _chat_activity(self, handler: _Exchange) -> None:
+        session = self._session(handler)
+        if session is None:
+            _send_json(handler, 401, {"ok": False, "missing": self.settings.missing_auth(), "error": "Sign in required"})
+            return
+        _send_json(handler, 200, {"ok": True, "status": session.read_chat_status()})
+
     def _session_status(self, handler: _Exchange) -> None:
         session = self._session(handler)
         if session is None:
@@ -385,6 +405,7 @@ class PlannerApp:
                 "error": "Set OLLAMA_MODEL in .env, or GEMINI_API_KEY, or the Azure OpenAI names listed in .env.example.",
             }
         base, editor, reviewer = self._chat_models()
+        session.set_chat_status("Reading your message")
         try:
             turn = run_turn(
                 self.service_for(session),
@@ -393,9 +414,12 @@ class PlannerApp:
                 base,
                 editor,
                 reviewer,
+                session.set_chat_status,
             )
         except RuntimeError as exc:
             return 200, {"ok": False, "error": str(exc)}
+        finally:
+            session.set_chat_status("")
         session.view.mode = turn.mode
         payload = self.api_for(session).snapshot(turn.task_id)
         payload["reply"] = turn.reply

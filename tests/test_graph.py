@@ -87,6 +87,28 @@ def test_a_missing_alarm_time_is_saved_as_no_alarm(service):
     assert "edit this task or start a new one" in turn.reply.lower()
 
 
+def test_a_turn_names_each_step_while_it_runs(service):
+    base = ScriptedModel([base_decision(True, "", {"action": "create", "title": "Go to Beach", "alarm": "no"})])
+    editor = ScriptedModel(
+        [
+            editor_call("list_tasks", {}),
+            editor_call("create_task", {"title": "Go to Beach"}),
+        ]
+    )
+    reviewer = ScriptedModel([reviewer_reply("Go to Beach successfully created, with no end date")])
+    seen = []
+
+    run_turn(service, "create Go to Beach, no alarm", "summary", base, editor, reviewer, seen.append)
+
+    assert seen == [
+        "Reading your message",
+        "Applying the change",
+        "Retrieving task data",
+        "Creating task",
+        "Writing a reply",
+    ]
+
+
 def test_a_task_with_no_duration_is_ongoing(service):
     base = ScriptedModel([base_decision(True, "", {"action": "create", "title": "Go to Beach", "alarm": "no"})])
     editor = ScriptedModel([editor_call("create_task", {"title": "Go to Beach"})])

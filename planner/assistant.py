@@ -139,11 +139,11 @@ class Turn:
         self.task_id = task_id
 
 
-def run_turn(service: PlannerService, user_text: str, mode: str, base, editor, reviewer) -> Turn:
+def run_turn(service: PlannerService, user_text: str, mode: str, base, editor, reviewer, on_status=None) -> Turn:
     """Run one user message through the base, editor, and reviewer graph."""
     from planner.graph import run_planner
 
-    return run_planner(service, user_text, mode, base, editor, reviewer)
+    return run_planner(service, user_text, mode, base, editor, reviewer, on_status)
 
 
 def _span_from_arguments(arguments: dict) -> tuple[date | None, date | None]:

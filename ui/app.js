@@ -8,6 +8,8 @@ let chain = Promise.resolve();
 let polling = false;
 let detailTab = "details";
 let chatMessages = [];
+let chatBusy = false;
+let chatStatus = "";
 let openFields = new Set();
 let openFor = null;
 let showCalendar = false;
@@ -768,10 +770,12 @@ document.getElementById("redo").addEventListener("click", () => run(redo));
 document.getElementById("logout").addEventListener("click", logout);
 document.getElementById("chat-form").addEventListener("submit", (event) => {
   event.preventDefault();
+  if (chatBusy) return;
   const input = document.getElementById("chat-input");
   const message = input.value.trim();
   if (!message) return;
   input.value = "";
+  chatBusy = true;
   run(() => sendChat(message));
 });
 document.getElementById("previous-day").addEventListener("click", () => run(() => shiftDay(-1)));
@@ -818,32 +822,73 @@ function renderChat() {
   chatMessages.forEach((entry) => {
     log.append(el("p", "chat-" + entry.role, entry.text));
   });
+  if (chatBusy) {
+    const pending = el("p", "chat-assistant chat-pending");
+    pending.setAttribute("role", "status");
+    const spinner = el("span", "chat-spinner");
+    spinner.setAttribute("aria-hidden", "true");
+    pending.append(spinner, el("span", "chat-pending-text", chatStatus || "Reading your message"));
+    log.append(pending);
+  }
   log.scrollTop = log.scrollHeight;
 }
 
 async function sendChat(message) {
   chatMessages.push({ role: "user", text: message });
+  chatBusy = true;
+  chatStatus = "Reading your message";
+  setChatEnabled(false);
   renderChat();
-  const response = await fetch("/api/chat", {
-    method: "POST",
-    credentials: "same-origin",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message }),
-  });
-  if (response.status === 401) {
-    showGate(await response.json());
-    return;
-  }
-  const result = await response.json();
-  if (!result.ok) {
-    chatMessages.push({ role: "assistant", text: result.error || "The assistant could not answer." });
+  const poll = setInterval(pollChatStatus, 250);
+  try {
+    const response = await fetch("/api/chat", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message }),
+    });
+    if (response.status === 401) {
+      showGate(await response.json());
+      return;
+    }
+    const result = await response.json();
+    if (!result.ok) {
+      chatMessages.push({ role: "assistant", text: result.error || "The assistant could not answer." });
+      showError(result.error);
+      return;
+    }
+    chatMessages.push({ role: "assistant", text: result.reply || "Done." });
+    take(result);
+  } catch {
+    chatMessages.push({ role: "assistant", text: "The assistant could not answer." });
+  } finally {
+    clearInterval(poll);
+    chatBusy = false;
+    chatStatus = "";
+    setChatEnabled(true);
     renderChat();
-    showError(result.error);
-    return;
   }
-  chatMessages.push({ role: "assistant", text: result.reply || "Done." });
-  renderChat();
-  take(result);
+}
+
+async function pollChatStatus() {
+  if (!chatBusy) return;
+  try {
+    const response = await fetch("/api/chat/status", { credentials: "same-origin" });
+    if (!response.ok) return;
+    const body = await response.json();
+    if (body.status && body.status !== chatStatus) {
+      chatStatus = body.status;
+      renderChat();
+    }
+  } catch {
+    // The reply is still on its way.
+  }
+}
+
+function setChatEnabled(enabled) {
+  document.getElementById("chat-input").disabled = !enabled;
+  const button = document.querySelector("#chat-form button");
+  if (button) button.disabled = !enabled;
 }
 
 async function logout() {

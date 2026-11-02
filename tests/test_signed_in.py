@@ -299,7 +299,13 @@ def test_http_api_keeps_each_signed_in_user_separate(tmp_path, clock):
         status, body = call(port, "POST", "/api/rpc", {"name": "create_task", "args": []})
         assert status == 401
 
+        status, body = call(port, "GET", "/api/chat/status")
+        assert status == 401
+
         ada = app.sign_in_for_tests("auth0|ada", "Ada")
+        status, idle = call(port, "GET", "/api/chat/status", cookie=ada)
+        assert status == 200
+        assert idle == {"ok": True, "status": ""}
         bob = app.sign_in_for_tests("auth0|bob", "Bob")
         status, created = call(port, "POST", "/api/rpc", {"name": "create_task", "args": ["go shopping"]}, ada)
         assert status == 200

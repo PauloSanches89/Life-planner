@@ -74,9 +74,9 @@ class PlannerState(TypedDict, total=False):
     task_id: str | None
 
 
-def run_planner(service: PlannerService, user_text: str, mode: str, base, editor, reviewer) -> Turn:
+def run_planner(service: PlannerService, user_text: str, mode: str, base, editor, reviewer, on_status=None) -> Turn:
     selected = choose_mode(user_text, mode)
-    graph = compile_planner(service, base, editor, reviewer)
+    graph = compile_planner(service, base, editor, reviewer, on_status)
     try:
         result = graph.invoke(
             {
@@ -110,13 +110,14 @@ def run_planner(service: PlannerService, user_text: str, mode: str, base, editor
     return Turn(reply, selected, result.get("task_id"))
 
 
-def compile_planner(service: PlannerService, base, editor, reviewer):
+def compile_planner(service: PlannerService, base, editor, reviewer, on_status=None):
     """Each user message starts at the base node. A finished edit returns there on the next message."""
     bucket: list[dict] = []
     tools = _editor_tools(service, bucket)
     by_name = {item.name: item for item in tools}
 
     def base_node(state: PlannerState) -> dict:
+        _report_status(on_status, "Reading your message")
         intake = state.get("intake") or {}
         user_text = state.get("user_text") or ""
         shown = str(intake.get("task_id") or "").strip()
@@ -151,6 +152,7 @@ def compile_planner(service: PlannerService, base, editor, reviewer):
         )
 
     def editor_node(state: PlannerState) -> dict:
+        _report_status(on_status, "Applying the change")
         bucket.clear()
         bound = editor.bind_tools(tools)
         messages = [
@@ -172,7 +174,7 @@ def compile_planner(service: PlannerService, base, editor, reviewer):
         intake = state.get("intake") or {}
         required = _required_call(action, planned)
         if required:
-            _run_call(by_name, bucket, required, action)
+            _run_call(by_name, bucket, required, action, on_status)
         for _round in range(5):
             if required or (
                 bucket
@@ -186,7 +188,7 @@ def compile_planner(service: PlannerService, base, editor, reviewer):
             messages.append(message)
             for call in calls:
                 args = _args_from_state(call.get("args") or {}, planned, call.get("name") or "")
-                payload = _run_call(by_name, bucket, {**call, "args": args}, action)
+                payload = _run_call(by_name, bucket, {**call, "args": args}, action, on_status)
                 messages.append(ToolMessage(content=payload, tool_call_id=call.get("id") or "call"))
         outcome = _outcome(bucket, action)
         missing = _missing_steps(state.get("intake") or {}, bucket)
@@ -202,6 +204,7 @@ def compile_planner(service: PlannerService, base, editor, reviewer):
         return {"outcome": outcome, "task_id": task.get("id")}
 
     def reviewer_node(state: PlannerState) -> dict:
+        _report_status(on_status, "Writing a reply")
         outcome = state.get("outcome") or {}
         message = reviewer.invoke(
             [
@@ -834,8 +837,26 @@ def _editor_tools(service: PlannerService, bucket: list[dict]):
     ]
 
 
-def _run_call(by_name: dict, bucket: list[dict], call: dict, action: str) -> str:
+_STEP_STATUS = {
+    "list_tasks": "Retrieving task data",
+    "get_task": "Retrieving task data",
+    "create_task": "Creating task",
+    "update_task": "Updating task",
+    "set_alarm": "Setting an alarm",
+    "add_link": "Adding a link",
+    "delete_task": "Deleting task",
+    "restore_task": "Restoring task",
+}
+
+
+def _report_status(on_status, text: str) -> None:
+    if on_status is not None:
+        on_status(text)
+
+
+def _run_call(by_name: dict, bucket: list[dict], call: dict, action: str, on_status=None) -> str:
     name = call.get("name") or ""
+    _report_status(on_status, _STEP_STATUS.get(name, "Working on your request"))
     args = call.get("args") or {}
     if not isinstance(args, dict):
         args = {}

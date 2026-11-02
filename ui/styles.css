@@ -628,6 +628,35 @@ textarea,
   background: var(--mint);
 }
 
+.chat-pending {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--accent-ink);
+}
+
+.chat-spinner {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  border: 2px solid var(--accent);
+  border-top-color: var(--accent-deep);
+  border-radius: 50%;
+  animation: chat-spin 0.7s linear infinite;
+}
+
+@keyframes chat-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-spinner {
+    animation: none;
+  }
+}
+
 .chat-form {
   display: flex;
   gap: 8px;
