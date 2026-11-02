@@ -248,3 +248,30 @@
 - Delta: `_required_call` runs `delete_task` or `restore_task` and does not run the model's create or update call.
 - Why: The editor called create_task for "make tea", that call failed because the task existed, and the failed call stopped the delete.
 - Result: eval not rerun
+
+### 2026-11-02 — prompt change
+
+- By: user
+- Step: Treat a list as a new task whose items are subtasks.
+- Target: system, `planner/graph.py`
+- Delta: "A list, such as a shopping list, is a new task. The title is the list name, such as shopping list. Each item on the list is a subtask."
+- Why: "create a shopping list that has eggs, cream and milk on it" was answered with "What would you like to change?" and nothing was saved.
+- Result: eval not rerun
+
+### 2026-11-02 — tool
+
+- By: user
+- Step: Save a requested list as a task, with one subtask per item.
+- Target: tool, `planner/graph.py`
+- Delta: `_apply_list_request` sets the title and subtasks from the message. `_required_call` then runs `create_task` with those subtasks.
+- Why: The model did not turn "shopping list" into a create, so eggs, cream, and milk were never stored.
+- Result: eval not rerun
+
+### 2026-11-02 — tool
+
+- By: user
+- Step: Split list items when the user leaves out commas.
+- Target: tool, `planner/graph.py`
+- Delta: `_split_items` separates words on spaces as well as commas. The word "and" is a separator. The words after the last "and" stay one item.
+- Why: "mil cheese eggs and toilet paper" saved "mil cheese eggs" as one subtask because there was no comma.
+- Result: eval not rerun
