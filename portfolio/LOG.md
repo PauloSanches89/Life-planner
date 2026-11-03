@@ -338,3 +338,66 @@
 - Delta: Removed `reasoning=False` from the base, editor, and reviewer `ChatOllama` clients.
 - Why: With thinking off, `qwen3:4b` does nothing. The line had been added again while diagnosing a failed save.
 - Result: eval not rerun
+
+### 2026-11-03 — prompt change
+
+- By: user
+- Step: Let the base and reviewer write their own replies.
+- Target: system, `planner/graph.py`
+- Delta: `BASE_PROMPT` says that when ready is false the model writes its own short polite question, and leaves reply empty when ready is true. `REVIEWER_PROMPT` says to write a helpful polite reply from the tool result and not claim a missing step. Removed `factual_reply`, `honest_reply`, and `_close_reply`.
+- Why: Follow-up questions and the final reply were fixed sentences instead of the models' own words.
+- Result: eval not rerun
+
+### 2026-11-03 — model change
+
+- By: user
+- Step: Turn reasoning off for the editor only.
+- Target: model, `planner/server.py`
+- Delta: The middle `ChatOllama` client is constructed with `reasoning=False`. The base and reviewer clients are not.
+- Why: The editor needs to call tools. Thinking stays on for the base and the reviewer.
+- Result: eval not rerun
+
+### 2026-11-03 — prompt change
+
+- By: user
+- Step: Tell the base model what a new task requires.
+- Target: system, `planner/graph.py`
+- Delta: `BASE_PROMPT` says a create needs a title and whether the task is persistent (`ongoing` true, no dates) or locked to `start_date` and `end_date`. Description, location, subtasks, an alarm, and links are optional. A question about those requirements uses action `answer`, ready false, and the model's own words.
+- Why: Asking what information is needed was treated as an incomplete edit.
+- Result: eval not rerun
+
+### 2026-11-03 — prompt change
+
+- By: user
+- Step: Give the model earlier session summaries for a named task.
+- Target: system, `planner/graph.py`
+- Delta: The base and editor context now include `task_sessions` instead of `task_transcript`. The prompt says those summaries are earlier chats and are not part of the current chat.
+- Why: A new opening of the app starts an empty chat. The model still needs a short record of earlier chats about the same task.
+- Result: eval not rerun
+
+### 2026-11-03 — data change
+
+- By: user
+- Step: Keep a chat log per session and one summary per task per session.
+- Target: tool, `planner/models.py`, `planner/service.py`, `planner/server.py`
+- Delta: A new process archives the previous visible chat onto the user document and starts an empty chat. A refresh of the same process still shows the in-memory chat. Each task stores `{session_id, summary}` built from that session's turns, capped at 500 characters.
+- Why: The previous conversation was being copied back into the page on every launch.
+- Result: eval not rerun
+
+### 2026-11-03 — prompt change
+
+- By: user
+- Step: Stop sending earlier chat summaries to the editor.
+- Target: system, `planner/graph.py`
+- Delta: Removed the `task_sessions` sentence from `EDITOR_PROMPT` and removed `task_sessions` from the editor's input. The base prompt still receives those summaries.
+- Why: The editor applies the intake the base model already filled. The earlier chat is not an input it can apply.
+- Result: eval not rerun
+
+### 2026-11-03 — model change
+
+- By: user
+- Step: Time out a stuck Ollama chat call and try it once more.
+- Target: model, `planner/assistant.py`, `planner/server.py`
+- Delta: Each Ollama chat client waits 90 seconds for the next response byte. `OneRetry` runs that call one more time after `httpx.TimeoutException`. A second timeout becomes "The assistant took too long. Try again."
+- Why: A chat request stayed open while the runner had processed none of the prompt, and the page kept spinning.
+- Result: eval not rerun

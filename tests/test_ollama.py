@@ -3,7 +3,9 @@ import threading
 import time
 from urllib.error import URLError
 
-from planner.assistant import OLLAMA_KEEP_ALIVE, OllamaWarmup, ensure_ollama
+import httpx
+
+from planner.assistant import OLLAMA_KEEP_ALIVE, OneRetry, OllamaWarmup, ensure_ollama
 
 
 class ScriptedResponse:
@@ -140,3 +142,38 @@ def test_warmup_opens_the_app_when_ollama_is_down():
     warmup = OllamaWarmup("http://127.0.0.1:11434", "qwen3:4b", opener)
     warmup.start()
     warmup.stop()
+
+
+class _FlakyModel:
+    def __init__(self, failures: int, result="ok") -> None:
+        self.failures = failures
+        self.result = result
+        self.calls = 0
+
+    def bind_tools(self, tools, **kwargs):
+        return self
+
+    def invoke(self, messages, **kwargs):
+        self.calls += 1
+        if self.calls <= self.failures:
+            raise httpx.ReadTimeout("The read operation timed out")
+        return self.result
+
+
+def test_a_timed_out_model_call_is_tried_once_more():
+    model = _FlakyModel(1, "recovered")
+
+    assert OneRetry(model).invoke(["hello"]) == "recovered"
+    assert model.calls == 2
+
+
+def test_a_second_timeout_is_not_tried_again():
+    model = _FlakyModel(2)
+    wrapped = OneRetry(model).bind_tools([])
+
+    try:
+        wrapped.invoke(["hello"])
+    except httpx.ReadTimeout:
+        assert model.calls == 2
+    else:
+        raise AssertionError("the second timeout should reach the caller")

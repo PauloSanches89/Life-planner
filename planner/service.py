@@ -193,6 +193,71 @@ class PlannerService:
                 document.task_transcripts[task_id] = current[-40:]
             self._store.save(document)
 
+    def replace_session_log(self, session_id: str, messages: list[dict]) -> None:
+        kept = []
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            role = message.get("role")
+            text = str(message.get("text") or "").strip()
+            if role in {"user", "assistant"} and text:
+                kept.append({"role": role, "text": text})
+        with self._lock:
+            document = self._store.load()
+            if kept:
+                document.chat_logs[session_id] = kept[-80:]
+            else:
+                document.chat_logs.pop(session_id, None)
+            self._store.save(document)
+
+    def chat_log(self, session_id: str) -> list[dict]:
+        with self._lock:
+            items = self._store.load().chat_logs.get(session_id) or []
+            return copy.deepcopy(items) if isinstance(items, list) else []
+
+    def record_task_session(self, task_id: str, session_id: str, user_text: str, reply: str) -> None:
+        spoken = user_text.strip()
+        answer = reply.strip()
+        if not task_id or not session_id or not spoken:
+            return
+        addition = f"User: {spoken}"
+        if answer:
+            addition = f"{addition}\nAssistant: {answer}"
+        with self._lock:
+            document = self._store.load()
+            entries = [item for item in list(document.task_session_summaries.get(task_id) or []) if isinstance(item, dict)]
+            current = ""
+            for item in entries:
+                if item.get("session_id") == session_id:
+                    current = str(item.get("summary") or "").strip()
+                    break
+            combined = f"{current}\n{addition}".strip() if current else addition
+            if len(combined) > 500:
+                combined = combined[-500:]
+            updated = [item for item in entries if item.get("session_id") != session_id]
+            updated.append({"session_id": session_id, "summary": combined})
+            document.task_session_summaries[task_id] = updated
+            log = list(document.chat_logs.get(session_id) or [])
+            log.append({"role": "user", "text": spoken})
+            if answer:
+                log.append({"role": "assistant", "text": answer})
+            document.chat_logs[session_id] = log[-80:]
+            self._store.save(document)
+
+    def earlier_task_sessions(self, task_id: str, current_session_id: str | None = None) -> list[dict]:
+        with self._lock:
+            entries = list(self._store.load().task_session_summaries.get(task_id) or [])
+        return [
+            {"session_id": item["session_id"], "summary": item["summary"]}
+            for item in entries
+            if isinstance(item, dict)
+            and isinstance(item.get("session_id"), str)
+            and item["session_id"]
+            and item["session_id"] != current_session_id
+            and isinstance(item.get("summary"), str)
+            and item["summary"].strip()
+        ]
+
     def get_task_notes(self) -> dict[str, str]:
         with self._lock:
             return {key: str(value) for key, value in self._store.load().task_notes.items()}

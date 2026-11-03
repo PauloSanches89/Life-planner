@@ -111,6 +111,8 @@ class Document:
     task_notes: dict = field(default_factory=dict)
     deleted_tasks: dict = field(default_factory=dict)
     task_transcripts: dict = field(default_factory=dict)
+    chat_logs: dict = field(default_factory=dict)
+    task_session_summaries: dict = field(default_factory=dict)
 
 
 STORE_VERSION = 2
@@ -193,6 +195,8 @@ def document_to_dict(document: Document) -> dict:
         "taskNotes": document.task_notes,
         "deletedTasks": document.deleted_tasks,
         "taskTranscripts": document.task_transcripts,
+        "chatLogs": document.chat_logs,
+        "taskSessionSummaries": document.task_session_summaries,
         "tasks": [task_to_dict(task) for task in document.tasks],
     }
 
@@ -339,6 +343,10 @@ def document_from_dict(data: object) -> Document:
     task_notes = _optional_dict(raw.get("taskNotes", raw.get("task_notes")))
     deleted_tasks = _optional_dict(raw.get("deletedTasks", raw.get("deleted_tasks")))
     task_transcripts = _transcripts(raw.get("taskTranscripts", raw.get("task_transcripts")))
+    chat_logs = _chat_logs(raw.get("chatLogs", raw.get("chat_logs")))
+    task_session_summaries = _task_session_summaries(
+        raw.get("taskSessionSummaries", raw.get("task_session_summaries"))
+    )
     if version == 1:
         selected_day = _require_date(raw, "selected_day", "document")
     else:
@@ -362,6 +370,8 @@ def document_from_dict(data: object) -> Document:
         task_notes=task_notes,
         deleted_tasks=deleted_tasks,
         task_transcripts=task_transcripts,
+        chat_logs=chat_logs,
+        task_session_summaries=task_session_summaries,
     )
 
 
@@ -381,6 +391,52 @@ def _transcripts(value: object) -> dict:
                 kept.append({"role": role, "text": text.strip()})
         if kept:
             cleaned[task_id] = kept[-40:]
+    return cleaned
+
+
+def _chat_logs(value: object) -> dict:
+    raw = _optional_dict(value)
+    cleaned = {}
+    for session_id, messages in raw.items():
+        if not isinstance(session_id, str) or not session_id or not isinstance(messages, list):
+            continue
+        kept = []
+        for item in messages:
+            if not isinstance(item, dict):
+                continue
+            role = item.get("role")
+            text = item.get("text")
+            if role in {"user", "assistant"} and isinstance(text, str) and text.strip():
+                kept.append({"role": role, "text": text.strip()})
+        if kept:
+            cleaned[session_id] = kept[-80:]
+    return cleaned
+
+
+def _task_session_summaries(value: object) -> dict:
+    raw = _optional_dict(value)
+    cleaned = {}
+    for task_id, entries in raw.items():
+        if not isinstance(task_id, str) or not task_id or not isinstance(entries, list):
+            continue
+        kept = []
+        seen = set()
+        for item in entries:
+            if not isinstance(item, dict):
+                continue
+            session_id = item.get("session_id")
+            summary = item.get("summary")
+            if (
+                isinstance(session_id, str)
+                and session_id
+                and session_id not in seen
+                and isinstance(summary, str)
+                and summary.strip()
+            ):
+                seen.add(session_id)
+                kept.append({"session_id": session_id, "summary": summary.strip()[-500:]})
+        if kept:
+            cleaned[task_id] = kept
     return cleaned
 
 

@@ -8,6 +8,8 @@ import shutil
 import subprocess
 import threading
 import time
+
+import httpx
 from datetime import date
 from urllib.error import URLError
 from urllib.parse import urlparse
@@ -19,6 +21,7 @@ from planner.service import PlannerService
 
 OLLAMA_KEEP_ALIVE = "2m"
 OLLAMA_REFRESH_SECONDS = 30
+OLLAMA_CHAT_TIMEOUT = 90
 
 
 def ensure_ollama(base_url: str, opener=None, finder=None, popen=None, sleep=None, attempts: int = 40) -> bool:
@@ -120,6 +123,22 @@ def _ollama_keep_alive(base_url: str, model: str, keep_alive: int | str, opener,
         return
 
 
+class OneRetry:
+    """Run one model call again when it times out. A second timeout is returned."""
+
+    def __init__(self, model) -> None:
+        self._model = model
+
+    def bind_tools(self, tools, **kwargs):
+        return OneRetry(self._model.bind_tools(tools, **kwargs))
+
+    def invoke(self, messages, **kwargs):
+        try:
+            return self._model.invoke(messages, **kwargs)
+        except httpx.TimeoutException:
+            return self._model.invoke(messages, **kwargs)
+
+
 def choose_mode(message: str, current: str) -> str:
     """Detailed when the user asks to read tasks or wants the long form. Summary when they ask for it."""
     text = message.lower()
@@ -139,11 +158,20 @@ class Turn:
         self.task_id = task_id
 
 
-def run_turn(service: PlannerService, user_text: str, mode: str, base, editor, reviewer, on_status=None) -> Turn:
+def run_turn(
+    service: PlannerService,
+    user_text: str,
+    mode: str,
+    base,
+    editor,
+    reviewer,
+    on_status=None,
+    chat_session_id: str | None = None,
+) -> Turn:
     """Run one user message through the base, editor, and reviewer graph."""
     from planner.graph import run_planner
 
-    return run_planner(service, user_text, mode, base, editor, reviewer, on_status)
+    return run_planner(service, user_text, mode, base, editor, reviewer, on_status, chat_session_id)
 
 
 def _span_from_arguments(arguments: dict) -> tuple[date | None, date | None]:

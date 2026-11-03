@@ -176,7 +176,7 @@ def test_create_task_with_an_end_before_the_start_is_not_saved(service):
     }
     base = ScriptedModel([base_decision(True, "", intake)])
     editor = ScriptedModel([editor_call("create_task", intake)])
-    reviewer = ScriptedModel([reviewer_reply("Backwards successfully created on 3 November 2026")])
+    reviewer = ScriptedModel([reviewer_reply("I could not save that task.")])
 
     turn = run_turn(
         service,
@@ -187,7 +187,7 @@ def test_create_task_with_an_end_before_the_start_is_not_saved(service):
         reviewer,
     )
 
-    assert "success" not in turn.reply.lower()
+    assert turn.reply == "I could not save that task."
     assert service._store.load().tasks == []
 
 
@@ -260,6 +260,7 @@ def test_chat_history_returns_with_the_same_login(tmp_path, clock):
     session = first.sessions[session_id]
     session.append_chat("user", "read my tasks")
     session.append_chat("assistant", "You have none.")
+    chat_id = session.chat_session_id
     first._remember(session_id, session)
 
     second = PlannerApp(blank_settings(), tmp_path, clock, key, ui)
@@ -267,7 +268,11 @@ def test_chat_history_returns_with_the_same_login(tmp_path, clock):
     try:
         status, body = call(httpd.server_address[1], "GET", "/api/session", cookie=session_id)
         assert status == 200
-        assert body["chat"] == [
+        assert body["chat"] == []
+        restored = second.sessions[session_id]
+        assert restored.chat_session_id != chat_id
+        saved = second.service_for(restored).chat_log(chat_id)
+        assert saved == [
             {"role": "user", "text": "read my tasks"},
             {"role": "assistant", "text": "You have none."},
         ]

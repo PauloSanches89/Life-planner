@@ -34,16 +34,23 @@ BASE_PROMPT = (
     "Count today, tonight, tomorrow, and yesterday from today, never from selected_day. "
     "Tomorrow is the day after today. A named calendar date is that date. "
     "If a relative span such as the next 3 days could start on either today or selected_day, "
-    "set ready to false and ask, naming both dates. "
+    "set ready to false and ask in your own words, including both dates. "
     "When those dates are the same day, count the span from today. "
-    "task_transcript is the earlier conversation about this task only. "
+    "task_sessions are summaries of earlier chats about this task, one for each past session. "
+    "They are not part of the current chat. "
     "task_state is the saved task when this is an edit. "
     "Fill intake to this schema and repair typos so the values are usable. "
-    "action is create, update, delete, or restore. "
+    "action is create, update, delete, restore, or answer. "
     "title, description, and location are strings. A place named with for, at, or from goes in location. "
     "subtasks is an array of strings, one item each, even when the user omits commas or misspells a word. "
     "start_date and end_date are YYYY-MM-DD or empty. "
+    "Creating a task needs a title, and whether the task is persistent or locked to a date. "
+    "Persistent means no start or end date, so ongoing is true. Locked to a date means start_date and end_date are filled. "
+    "Description, location, subtasks, an alarm, and links can be added, and they are not required. "
+    "When the user asks what information is needed to create a task, set action to answer and ready to false, "
+    "and explain those requirements in your own words. Do not ask them to choose an existing task. "
     "A list is action create. Its title is the list name, such as shopping list. s hopping means shopping. "
+    "When ready is false, write your own short polite question in reply about what is still missing. "
     "Leave reply empty when ready is true."
 )
 
@@ -56,11 +63,9 @@ EDITOR_PROMPT = (
 )
 
 REVIEWER_PROMPT = (
-    "Compare the state with the tool steps. Reply with JSON only: {\"reply\": \"...\"}. "
-    "If result.ok is false or a required step is missing, say the change did not happen and include result.error. "
-    "Do not claim a step that is not in the steps list. "
-    "If the task was saved, say it was created or updated. "
-    "Then tell the user they can edit this task or start a new one."
+    "You write the reply the user will read. Reply with JSON only: {\"reply\": \"...\"}. "
+    "Be helpful and polite. Base the reply only on the tool result. "
+    "Do not claim a step that is not in the steps list."
 )
 
 
@@ -74,9 +79,18 @@ class PlannerState(TypedDict, total=False):
     task_id: str | None
 
 
-def run_planner(service: PlannerService, user_text: str, mode: str, base, editor, reviewer, on_status=None) -> Turn:
+def run_planner(
+    service: PlannerService,
+    user_text: str,
+    mode: str,
+    base,
+    editor,
+    reviewer,
+    on_status=None,
+    chat_session_id: str | None = None,
+) -> Turn:
     selected = choose_mode(user_text, mode)
-    graph = compile_planner(service, base, editor, reviewer, on_status)
+    graph = compile_planner(service, base, editor, reviewer, on_status, chat_session_id)
     try:
         result = graph.invoke(
             {
@@ -100,17 +114,11 @@ def run_planner(service: PlannerService, user_text: str, mode: str, base, editor
     else:
         service.set_intake(result.get("intake") or {})
     reply = (result.get("reply") or "").strip()
-    if result.get("ready") and not reply:
-        reply = factual_reply(outcome)
-    if not reply:
-        reply = "What would you like to change?"
-    if result.get("ready"):
-        reply = _close_reply(reply, result.get("intake") or {})
-    _remember_turn(service, user_text, reply, result)
+    _remember_turn(service, user_text, reply, result, chat_session_id)
     return Turn(reply, selected, result.get("task_id"))
 
 
-def compile_planner(service: PlannerService, base, editor, reviewer, on_status=None):
+def compile_planner(service: PlannerService, base, editor, reviewer, on_status=None, chat_session_id: str | None = None):
     """Each user message starts at the base node. A finished edit returns there on the next message."""
     bucket: list[dict] = []
     tools = _editor_tools(service, bucket)
@@ -136,7 +144,7 @@ def compile_planner(service: PlannerService, base, editor, reviewer, on_status=N
             "deleted": service.list_deleted(),
             "intake": previous,
             "task_state": _saved_task(service, task_key),
-            "task_transcript": service.get_transcript(task_key) if task_key else [],
+            "task_sessions": service.earlier_task_sessions(task_key, chat_session_id) if task_key else [],
         }
         message = base.invoke(
             [
@@ -164,7 +172,6 @@ def compile_planner(service: PlannerService, base, editor, reviewer, on_status=N
                         "today": service.today().isoformat(),
                         "selected_day": service.get_selected_day().isoformat(),
                         "state": _editor_state(service, state.get("intake") or {}),
-                        "task_transcript": service.get_transcript(str((state.get("intake") or {}).get("task_id") or "")),
                     }
                 )
             ),
@@ -226,7 +233,7 @@ def compile_planner(service: PlannerService, base, editor, reviewer, on_status=N
         )
         parsed = _parse_json(message_text(message)) or {}
         reply = parsed.get("reply") if isinstance(parsed.get("reply"), str) else ""
-        return {"reply": honest_reply(reply, outcome)}
+        return {"reply": reply.strip()}
 
     graph = StateGraph(PlannerState)
     graph.add_node("base", base_node)
@@ -251,37 +258,38 @@ def _base_decision(content: str, user_text: str, previous: dict, service: Planne
     previous = _blank_new_task(previous, incoming, service)
     intake = _merge_intake(previous, incoming)
     intake = _assign_task_id(intake, previous, service, user_text)
-    question = _apply_date_policy(user_text, intake, service.today(), service.get_selected_day())
-    if question:
+    reply = payload.get("reply") if isinstance(payload.get("reply"), str) else ""
+    reply = reply.strip()
+    if _apply_date_policy(user_text, intake, service.today(), service.get_selected_day()):
         if _asks(intake) >= 2:
             _default_duration(intake)
             intake["date_anchor"] = "system"
         else:
             intake["asks"] = _asks(intake) + 1
-            return {"intake": intake, "ready": False, "reply": question}
+            return {"intake": intake, "ready": False, "reply": reply}
     _normalize_alarm(intake)
     _default_duration(intake)
     action = str(intake.get("action") or "")
-    ask = _next_question(intake, service)
-    reply = payload.get("reply") if isinstance(payload.get("reply"), str) else ""
-    reply = reply.strip()
     if action == "answer":
-        return {"intake": {}, "ready": False, "reply": reply or "What would you like to know?"}
+        return {"intake": {}, "ready": False, "reply": reply}
+    ask = _next_question(intake, service)
     if ask:
-        if ask.startswith("What time"):
+        if ask == "alarm":
             intake["alarm_asked"] = True
         intake["asks"] = _asks(intake) + 1
-        return {"intake": intake, "ready": False, "reply": ask}
+        return {"intake": intake, "ready": False, "reply": reply}
     if intake.get("alarm") == "yes":
         intake["alarm"] = "no"
         intake["alarm_skipped"] = True
     if action == "create" and not str(intake.get("title") or "").strip():
         intake["title"] = "New task"
-    gap = _missing(intake, {item["id"] for item in service.list_deleted()})
-    ready = gap is None and action in {"create", "update", "delete", "restore"}
+    ready = (
+        not _intake_incomplete(intake, {item["id"] for item in service.list_deleted()})
+        and action in {"create", "update", "delete", "restore"}
+    )
     if ready:
         return {"intake": intake, "ready": True, "reply": ""}
-    return {"intake": intake, "ready": False, "reply": gap or "What would you like to change?"}
+    return {"intake": intake, "ready": False, "reply": reply}
 
 
 def _blank_new_task(previous: dict, incoming: dict, service: PlannerService) -> dict:
@@ -303,23 +311,24 @@ def _asks(intake: dict) -> int:
 
 
 def _next_question(intake: dict, service: PlannerService) -> str | None:
+    """Name the missing field. The base model writes the question the user reads."""
     if _asks(intake) >= 2:
         return None
     action = str(intake.get("action") or "")
     if action == "create" and not str(intake.get("title") or "").strip():
-        return "What should the task be called?"
+        return "title"
     if action == "update" and not str(intake.get("task_id") or "").strip():
-        return "Which task should I change?"
+        return "task"
     if action == "delete" and not str(intake.get("task_id") or "").strip():
-        return "Which task should I delete?"
+        return "task"
     if action == "restore" and str(intake.get("task_id") or "").strip() not in {
         item["id"] for item in service.list_deleted()
     }:
-        return "Which deleted task should I put back?"
+        return "task"
     if action == "update" and not _has_change(intake):
-        return "What should I change on that task?"
+        return "change"
     if intake.get("alarm") == "yes" and intake.get("alarm_asked") is not True:
-        return "What time should the alarm be?"
+        return "alarm"
     return None
 
 
@@ -527,64 +536,57 @@ def _missing_steps(intake: dict, bucket: list[dict]) -> list[str]:
     return missing
 
 
-def _apply_date_policy(user_text: str, intake: dict, today: date, selected: date) -> str | None:
-    """Pin today and tomorrow to the system date. Ask when a span could start on either day."""
+def _apply_date_policy(user_text: str, intake: dict, today: date, selected: date) -> bool:
+    """Pin today and tomorrow to the system date. A true result means the base model should ask."""
     text = user_text.lower()
     if intake.get("date_anchor") == "unresolved":
         if _pins_selected(text) and not _pins_system(text):
             intake["date_anchor"] = "selected"
             _fill_anchor_start(intake, selected, today)
-            return None
+            return False
         if _pins_system(text) or _single_day(text) == "today":
             intake["date_anchor"] = "system"
             _fill_anchor_start(intake, today, selected)
-            return None
-        return _anchor_question(today, selected)
+            return False
+        return True
     if re.search(r"\d{4}-\d{2}-\d{2}", text) and not _is_span(text):
         intake["date_anchor"] = "explicit"
-        return None
+        return False
     span = _is_span(text)
     single = _single_day(text)
     pin_system = _pins_system(text) or single is not None
     pin_selected = _pins_selected(text)
     if span and pin_system and pin_selected:
         intake["date_anchor"] = "unresolved"
-        return _anchor_question(today, selected)
+        return True
     if span and pin_system:
         intake["date_anchor"] = "system"
         _fill_anchor_start(intake, today, selected)
-        return None
+        return False
     if span and pin_selected:
         intake["date_anchor"] = "selected"
         _fill_anchor_start(intake, selected, today)
-        return None
+        return False
     if span and selected != today:
         intake["date_anchor"] = "unresolved"
-        return _anchor_question(today, selected)
+        return True
     if span:
         intake["date_anchor"] = "system"
         _fill_anchor_start(intake, today, selected)
-        return None
+        return False
     if single:
         day = today + timedelta(days={"tomorrow": 1, "yesterday": -1}.get(single, 0))
         intake["start_date"] = day.isoformat()
         intake["end_date"] = day.isoformat()
         intake["ongoing"] = False
         intake["date_anchor"] = "system"
-    return None
+    return False
 
 
 def _fill_anchor_start(intake: dict, anchor_day: date, replace: date | None = None) -> None:
     current = str(intake.get("start_date") or "")
     if not current or (replace is not None and current == replace.isoformat()):
         intake["start_date"] = anchor_day.isoformat()
-
-
-def _anchor_question(today: date, selected: date) -> str:
-    return (
-        f"Do you mean from today ({_spoken_day(today.isoformat())}), "
-        f"or from the day open in the planner ({_spoken_day(selected.isoformat())})?"
-    )
 
 
 def _is_span(text: str) -> bool:
@@ -613,28 +615,17 @@ def _pins_selected(text: str) -> bool:
     )
 
 
-def _missing(intake: dict, deleted_ids: set[str]) -> str | None:
+def _intake_incomplete(intake: dict, deleted_ids: set[str]) -> bool:
     action = str(intake.get("action") or "")
     if action == "create":
-        if not str(intake.get("title") or "").strip():
-            return "What should the task be called?"
-        return None
+        return not str(intake.get("title") or "").strip()
     if action == "update":
-        if not str(intake.get("task_id") or "").strip():
-            return "Which task should I change?"
-        if not _has_change(intake):
-            return "What should I change on that task?"
-        return None
+        return not str(intake.get("task_id") or "").strip() or not _has_change(intake)
     if action == "delete":
-        if not str(intake.get("task_id") or "").strip():
-            return "Which task should I delete?"
-        return None
+        return not str(intake.get("task_id") or "").strip()
     if action == "restore":
-        task_id = str(intake.get("task_id") or "").strip()
-        if task_id not in deleted_ids:
-            return "Which deleted task should I put back?"
-        return None
-    return "What would you like to change?"
+        return str(intake.get("task_id") or "").strip() not in deleted_ids
+    return True
 
 
 def _has_change(intake: dict) -> bool:
@@ -917,7 +908,13 @@ def _compact_tasks(service: PlannerService) -> list[dict]:
     return items
 
 
-def _remember_turn(service: PlannerService, user_text: str, reply: str, result: dict) -> None:
+def _remember_turn(
+    service: PlannerService,
+    user_text: str,
+    reply: str,
+    result: dict,
+    chat_session_id: str | None = None,
+) -> None:
     intake = result.get("intake") or {}
     outcome = result.get("outcome") or {}
     task = outcome.get("task") or {}
@@ -930,6 +927,8 @@ def _remember_turn(service: PlannerService, user_text: str, reply: str, result: 
         task_id,
         [{"role": "user", "text": user_text}, {"role": "assistant", "text": reply}],
     )
+    if chat_session_id:
+        service.record_task_session(task_id, chat_session_id, user_text, reply)
 
 
 def _record_note(service: PlannerService, outcome: dict) -> None:
@@ -956,60 +955,6 @@ def _note_line(outcome: dict) -> str:
     if action == "restore":
         return f"{title}: restored."
     return f"{title}: updated."
-
-
-def _close_reply(reply: str, intake: dict) -> str:
-    text = reply.strip()
-    if intake.get("alarm_skipped") and "alarm was not set" not in text.lower():
-        text = f"{text} The alarm was not set. You can add it by editing the task."
-    if "edit this task or start a new one" not in text.lower():
-        text = f"{text} You can edit this task or start a new one."
-    return text.strip()
-
-
-def factual_reply(outcome: dict) -> str:
-    task = outcome.get("task") or {}
-    title = task.get("title") or "The task"
-    action = outcome.get("action") or "edit"
-    if not outcome.get("ok"):
-        reason = outcome.get("error") or "The edit did not happen."
-        verb = {"create": "create", "update": "update", "delete": "delete", "restore": "restore"}.get(action, "edit")
-        return f"Could not {verb} the task. {reason}"
-    if action == "create":
-        if task.get("ongoing"):
-            return f"{title} successfully created, with no end date"
-        spoken = _spoken_day(task.get("start_date"))
-        if spoken:
-            return f"{title} successfully created on {spoken}"
-        return f"{title} successfully created"
-    if action == "delete":
-        return f"{title} successfully deleted"
-    if action == "restore":
-        return f"{title} successfully restored"
-    return f"{title} successfully updated"
-
-
-def honest_reply(reply: str, outcome: dict) -> str:
-    text = reply.strip()
-    fact = factual_reply(outcome)
-    if not text:
-        return fact
-    claims_success = "success" in text.lower()
-    if outcome.get("ok"):
-        return text if claims_success else fact
-    if claims_success:
-        return fact
-    return text
-
-
-def _spoken_day(value) -> str:
-    if not isinstance(value, str) or not value:
-        return ""
-    try:
-        day = date.fromisoformat(value[:10])
-    except ValueError:
-        return value
-    return f"{day.day} {day.strftime('%B %Y')}"
 
 
 def message_text(message) -> str:
@@ -1054,6 +999,8 @@ def _parse_json(content: str) -> dict | None:
 
 def _model_error(exc: Exception) -> str:
     text = str(exc).lower()
+    if "timed out" in text or "timeout" in text:
+        return "The assistant took too long. Try again."
     if "connection" in text or "refused" in text or "11434" in text:
         return "Ollama is not running. Start Ollama, then try the assistant again."
     return str(exc) or "The assistant request failed"

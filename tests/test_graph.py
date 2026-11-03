@@ -36,6 +36,25 @@ def reviewer_reply(reply):
     return AIMessage(content=json.dumps({"reply": reply}))
 
 
+def test_asking_what_a_new_task_needs_explains_and_does_not_create(service):
+    reply = "I need a title, and whether the task stays persistent or is locked to a date."
+    base = ScriptedModel([base_decision(False, reply, {"action": "answer"})])
+    editor = ScriptedModel([])
+
+    turn = run_turn(
+        service,
+        "What information do you need to create a task?",
+        "summary",
+        base,
+        editor,
+        ScriptedModel([]),
+    )
+
+    assert turn.reply == reply
+    assert service.list_tasks() == []
+    assert editor.seen == []
+
+
 def test_base_asks_for_a_name_before_creating(service):
     base = ScriptedModel([base_decision(False, "What should the task be called?", {"action": "create"})])
 
@@ -55,7 +74,7 @@ def test_an_alarm_without_a_time_is_asked_once(service, store, clock):
 
     turn = run_turn(service, "create Go to Beach and set an alarm", "summary", base, ScriptedModel([]), ScriptedModel([]))
 
-    assert turn.reply == "What time should the alarm be?"
+    assert turn.reply == "What time?"
     assert service.list_tasks() == []
     reloaded = PlannerService(Store(store.root, clock), clock)
     assert reloaded.get_intake()["title"] == "Go to Beach"
@@ -83,8 +102,7 @@ def test_a_missing_alarm_time_is_saved_as_no_alarm(service):
     saved = service.get_task("task-pack")
     assert saved.ongoing is True
     assert saved.alarms == []
-    assert "alarm was not set" in turn.reply.lower()
-    assert "edit this task or start a new one" in turn.reply.lower()
+    assert turn.reply == "Go to Beach successfully created, with no end date"
 
 
 def test_a_turn_names_each_step_while_it_runs(service):
@@ -219,7 +237,7 @@ def test_a_repaired_list_schema_keeps_the_place_and_the_items(service):
 
 
 def test_a_list_sentence_is_not_parsed_when_the_model_leaves_the_schema_empty(service):
-    base = ScriptedModel([base_decision(False, "", {})])
+    base = ScriptedModel([base_decision(False, "What would you like to plan?", {})])
 
     turn = run_turn(
         service,
@@ -231,21 +249,19 @@ def test_a_list_sentence_is_not_parsed_when_the_model_leaves_the_schema_empty(se
     )
 
     assert service.list_tasks() == []
-    assert "what would you like to change" in turn.reply.lower()
+    assert turn.reply == "What would you like to plan?"
 
 
 def test_editor_prose_without_a_tool_call_is_not_a_saved_task(service):
     intake = {"action": "create", "title": "Go to Beach", "start_date": "2026-12-01", "alarm": "none"}
     base = ScriptedModel([base_decision(True, "", intake)])
     editor = ScriptedModel([AIMessage(content="I created Go to Beach.")])
-    reviewer = ScriptedModel([reviewer_reply("Go to Beach successfully created on 1 December 2026")])
+    reviewer = ScriptedModel([reviewer_reply("The editor did not change a task.")])
 
     turn = run_turn(service, "create Go to Beach on 2026-12-01, no alarm", "summary", base, editor, reviewer)
 
     assert service.list_tasks() == []
-    assert "success" not in turn.reply.lower()
-    assert "did not change" in turn.reply.lower()
-    assert "edit this task or start a new one" in turn.reply.lower()
+    assert turn.reply == "The editor did not change a task."
 
 
 def test_a_deleted_task_note_lets_the_next_turn_restore_that_task(service):
@@ -286,12 +302,12 @@ def test_delete_removes_the_task_when_the_editor_tries_to_create_it(service):
         [base_decision(True, "", {"action": "delete", "task_id": task.id, "title": "make tea"})]
     )
     editor = ScriptedModel([editor_call("create_task", {"title": "make tea", "task_id": task.id})])
-    reviewer = ScriptedModel([reviewer_reply("The change did not happen.")])
+    reviewer = ScriptedModel([reviewer_reply("make tea successfully deleted")])
 
     turn = run_turn(service, "delete the make tea task", "summary", base, editor, reviewer)
 
     assert service.list_tasks() == []
-    assert turn.reply.startswith("make tea successfully deleted")
+    assert turn.reply == "make tea successfully deleted"
     assert "already exists" not in turn.reply.lower()
 
 
@@ -338,12 +354,12 @@ def test_a_relative_span_asks_which_day_to_count_from(service):
     service.set_selected_day(date(2026, 11, 10))
     task = service.create_task("Errand")
     service.update_task(task.id, start_date=date(2026, 11, 10), end_date=date(2026, 11, 10))
-    base = ScriptedModel([base_decision(True, "", {"action": "delete", "task_id": task.id})])
+    question = "Do you mean 28 October 2026 or 10 November 2026?"
+    base = ScriptedModel([base_decision(True, question, {"action": "delete", "task_id": task.id})])
 
     turn = run_turn(service, "delete the next 3 days' tasks", "summary", base, ScriptedModel([]), ScriptedModel([]))
 
-    assert "28 October 2026" in turn.reply
-    assert "10 November 2026" in turn.reply
+    assert turn.reply == question
     assert service.get_task(task.id).title == "Errand"
     assert service.get_intake()["date_anchor"] == "unresolved"
 
@@ -424,14 +440,8 @@ def test_an_existing_task_keeps_its_id_and_later_edits_see_only_its_transcript(s
     service.update_task(beach.id, start_date=date(2026, 12, 1), end_date=date(2026, 12, 1))
     dentist = service.create_task("Dentist")
     service.update_task(dentist.id, start_date=date(2026, 11, 2), end_date=date(2026, 11, 2))
-    service.append_transcript(
-        beach.id,
-        [{"role": "user", "text": "pack towels"}, {"role": "assistant", "text": "Noted for the beach."}],
-    )
-    service.append_transcript(
-        dentist.id,
-        [{"role": "user", "text": "arrive early"}, {"role": "assistant", "text": "Noted for the dentist."}],
-    )
+    service.record_task_session(beach.id, "session-a", "pack towels", "Noted for the beach.")
+    service.record_task_session(dentist.id, "session-a", "arrive early", "Noted for the dentist.")
     change = {"action": "update", "task_id": beach.id, "start_date": "2026-12-04", "end_date": "2026-12-04"}
     base = ScriptedModel([base_decision(True, "", change)])
     editor = ScriptedModel(
@@ -439,14 +449,53 @@ def test_an_existing_task_keeps_its_id_and_later_edits_see_only_its_transcript(s
     )
     reviewer = ScriptedModel([reviewer_reply("Go to Beach successfully updated")])
 
-    turn = run_turn(service, "move Go to Beach to Friday", "summary", base, editor, reviewer)
+    turn = run_turn(
+        service,
+        "move Go to Beach to Friday",
+        "summary",
+        base,
+        editor,
+        reviewer,
+        chat_session_id="session-now",
+    )
 
     assert "successfully updated" in turn.reply.lower()
     assert service.get_task(beach.id).start_date == date(2026, 12, 4)
     prompt = base.seen[0][0].content
     assert "pack towels" in prompt
     assert "arrive early" not in prompt
-    editor_prompt = editor.seen[0][1].content
-    assert "pack towels" in editor_prompt
-    assert "arrive early" not in editor_prompt
+    editor_text = "\n".join(message.content for message in editor.seen[0])
+    assert "pack towels" not in editor_text
+    assert "arrive early" not in editor_text
     assert service.get_intake() == {}
+
+
+def test_two_sessions_for_one_task_each_keep_a_summary(service):
+    beach = service.create_task("Go to Beach")
+    service.record_task_session(beach.id, "session-a", "pack towels", "Noted for the beach.")
+    service.record_task_session(beach.id, "session-b", "bring sunscreen", "Added to the beach task.")
+
+    stored = service.earlier_task_sessions(beach.id)
+    assert [item["session_id"] for item in stored] == ["session-a", "session-b"]
+    assert "Noted for the beach." in stored[0]["summary"]
+    assert "Added to the beach task." in stored[1]["summary"]
+    assert service.chat_log("session-a")[0]["text"] == "pack towels"
+    assert service.chat_log("session-b")[0]["text"] == "bring sunscreen"
+
+    base = ScriptedModel([base_decision(False, "The beach task had earlier notes.", {"action": "answer"})])
+    run_turn(
+        service,
+        "what did we say about Go to Beach",
+        "summary",
+        base,
+        ScriptedModel([]),
+        ScriptedModel([]),
+        chat_session_id="session-c",
+    )
+
+    prompt = base.seen[0][0].content
+    assert "Noted for the beach." in prompt
+    assert "Added to the beach task." in prompt
+    assert "session-c" not in prompt
+    still = service.earlier_task_sessions(beach.id, "session-c")
+    assert [item["session_id"] for item in still] == ["session-a", "session-b"]

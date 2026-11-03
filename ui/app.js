@@ -816,7 +816,7 @@ function renderChat() {
   const log = document.getElementById("chat-log");
   log.replaceChildren();
   if (!chatMessages.length) {
-    log.append(el("p", "chat-empty", "Ask the assistant to read today's tasks, or to create one."));
+    log.append(el("p", "chat-assistant", "Welcome to your life-planner, how can I help you today?"));
     return;
   }
   chatMessages.forEach((entry) => {
@@ -857,7 +857,7 @@ async function sendChat(message) {
       showError(result.error);
       return;
     }
-    chatMessages.push({ role: "assistant", text: result.reply || "Done." });
+    chatMessages.push({ role: "assistant", text: result.reply || "" });
     take(result);
   } catch {
     chatMessages.push({ role: "assistant", text: "The assistant could not answer." });

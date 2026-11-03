@@ -12,13 +12,14 @@ import threading
 import time
 import traceback
 from pathlib import Path
+from uuid import uuid4
 from urllib.parse import parse_qs, urlparse
 
 import uvicorn
 
 from planner.alarms import AlarmBook
 from planner.auth import AuthError, authorize_url, code_verifier, exchange_profile
-from planner.assistant import OLLAMA_KEEP_ALIVE, run_turn
+from planner.assistant import OLLAMA_CHAT_TIMEOUT, OLLAMA_KEEP_ALIVE, OneRetry, run_turn
 from planner.bridge import JsApi, ViewState
 from planner.clock import Clock
 from planner.crypto import open_local, seal_local
@@ -63,6 +64,7 @@ class Session:
         self.name = name
         self.picture = picture
         self.view = ViewState()
+        self.chat_session_id = str(uuid4())
         self._chat_status = ""
         self._chat_log: list[dict] = []
         self._chat_status_lock = threading.Lock()
@@ -346,6 +348,13 @@ class PlannerApp:
             return
         self._remember(session_id, session)
 
+    def _save_chat(self, session: Session) -> None:
+        self._persist_session(session)
+        try:
+            self.service_for(session).replace_session_log(session.chat_session_id, session.read_chat())
+        except StoreError:
+            return
+
     def _remember(self, session_id: str, session: Session) -> None:
         expires = int(self.clock.now().timestamp()) + SESSION_MAX_AGE
         payload = json.dumps(
@@ -355,6 +364,7 @@ class PlannerApp:
                 "name": session.name,
                 "picture": session.picture,
                 "expires": expires,
+                "chat_session_id": session.chat_session_id,
                 "chat": session.read_chat(),
             },
             ensure_ascii=False,
@@ -385,12 +395,25 @@ class PlannerApp:
                 raise ValueError("incomplete")
             picture = data.get("picture")
             session = Session(sub, name, picture if isinstance(picture, str) else None)
-            for item in data.get("chat") or []:
-                if isinstance(item, dict) and isinstance(item.get("text"), str):
-                    session.append_chat(str(item.get("role") or ""), item["text"])
+            previous = [
+                {"role": str(item.get("role") or ""), "text": item["text"]}
+                for item in data.get("chat") or []
+                if isinstance(item, dict) and isinstance(item.get("text"), str) and item["text"].strip()
+            ]
+            previous_id = data.get("chat_session_id")
+            if not isinstance(previous_id, str) or not previous_id:
+                previous_id = str(uuid4())
             self.sessions[session_id] = session
+            if previous:
+                self._archive_previous_chat(sub, name, picture, previous_id, previous)
+            self._remember(session_id, session)
         except (OSError, StoreError, json.JSONDecodeError, KeyError, TypeError, ValueError):
             path.unlink(missing_ok=True)
+
+    def _archive_previous_chat(self, sub: str, name: str, picture, chat_session_id: str, messages: list[dict]) -> None:
+        profile = auth_profile(sub, name, picture if isinstance(picture, str) else None)
+        store = open_user_store(self.root, profile, self.master_key, self.clock, self.settings)
+        PlannerService(store, self.clock).replace_session_log(chat_session_id, messages)
 
     def _forget(self) -> None:
         self._session_path().unlink(missing_ok=True)
@@ -435,11 +458,11 @@ class PlannerApp:
             return 400, {"ok": False, "error": "Message is required"}
         text = message.strip()
         session.append_chat("user", text)
-        self._persist_session(session)
+        self._save_chat(session)
         if not self.settings.chat_configured:
             error = "Set OLLAMA_MODEL in .env, or GEMINI_API_KEY, or the Azure OpenAI names listed in .env.example."
             session.append_chat("assistant", error)
-            self._persist_session(session)
+            self._save_chat(session)
             return 200, {"ok": False, "error": error}
         base, editor, reviewer = self._chat_models()
         session.set_chat_status("Reading your message")
@@ -452,18 +475,19 @@ class PlannerApp:
                 editor,
                 reviewer,
                 session.set_chat_status,
+                session.chat_session_id,
             )
         except RuntimeError as exc:
             session.append_chat("assistant", str(exc))
-            self._persist_session(session)
+            self._save_chat(session)
             return 200, {"ok": False, "error": str(exc)}
         finally:
             session.set_chat_status("")
         session.view.mode = turn.mode
         payload = self.api_for(session).snapshot(turn.task_id)
-        reply = turn.reply or "Done."
+        reply = turn.reply
         session.append_chat("assistant", reply)
-        self._persist_session(session)
+        self._save_chat(session)
         payload["reply"] = reply
         return 200, payload
 
@@ -476,8 +500,17 @@ class PlannerApp:
                 "base_url": self.settings.ollama_base_url,
                 "temperature": 0.2,
                 "keep_alive": OLLAMA_KEEP_ALIVE,
+                "client_kwargs": {"timeout": OLLAMA_CHAT_TIMEOUT},
             }
-            return ChatOllama(**shared, format="json"), ChatOllama(**shared), ChatOllama(**shared, format="json")
+
+            def ollama(**extra):
+                return OneRetry(ChatOllama(**shared, **extra))
+
+            return (
+                ollama(format="json"),
+                ollama(reasoning=False),
+                ollama(format="json"),
+            )
         if self.settings.gemini_api_key:
             from langchain_google_genai import ChatGoogleGenerativeAI
 
