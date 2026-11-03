@@ -479,6 +479,50 @@ def test_an_existing_task_keeps_its_id_and_later_edits_see_only_its_transcript(s
     assert service.get_intake() == {}
 
 
+def test_an_alarm_offer_returns_to_the_base_model_when_the_user_agrees(service):
+    when = "2026-11-04T21:00:00+02:00"
+    base = ScriptedModel(
+        [base_decision(True, "", {"action": "create", "title": "Go to the moon", "alarm": "no", "ongoing": True})]
+    )
+    editor = ScriptedModel([editor_call("create_task", {"title": "Go to the moon", "ongoing": True})])
+    reviewer = ScriptedModel(
+        [
+            AIMessage(
+                content=json.dumps(
+                    {
+                        "reply": "Go to the moon is saved. Would you like me to set an alarm?",
+                        "offer": "alarm",
+                    }
+                )
+            )
+        ]
+    )
+
+    first = run_turn(service, "i need to go to the moon daily at 9pm", "summary", base, editor, reviewer)
+
+    kept = service.get_intake()
+    assert "Would you like me to set an alarm?" in first.reply
+    assert kept["offer"] == "alarm"
+    assert kept["task_id"]
+    assert kept["asked"] == "i need to go to the moon daily at 9pm"
+    task_id = kept["task_id"]
+    base = ScriptedModel([base_decision(True, "", {"action": "update", "alarm": when})])
+    editor = ScriptedModel(
+        [
+            editor_call("update_task", {"title": "Go to the moon"}),
+            editor_call("set_alarm", {"when": when}),
+        ]
+    )
+    reviewer = ScriptedModel([reviewer_reply("The alarm is set for 9pm.")])
+
+    second = run_turn(service, "yes", "summary", base, editor, reviewer)
+
+    assert service.get_task(task_id).alarms[0].fires_at.hour == 21
+    assert "Would you like me to set an alarm?" in base.seen[0][0].content
+    assert "i need to go to the moon daily at 9pm" in base.seen[0][0].content
+    assert "9pm" in second.reply
+
+
 def test_two_sessions_for_one_task_each_keep_a_summary(service):
     beach = service.create_task("Go to Beach")
     service.record_task_session(beach.id, "session-a", "pack towels", "Noted for the beach.")
@@ -575,13 +619,13 @@ def test_identifier_runs_when_no_title_matches(service):
     assert "Dentist" not in prompt
 
 
-def test_identifier_runs_when_several_titles_match(service):
-    day = service.create_task("Beach day")
-    trip = service.create_task("Beach trip")
-    identifier = ScriptedModel([AIMessage(content=json.dumps({"task_id": trip.id}))])
-    base = ScriptedModel([base_decision(False, "Which day?", {"action": "update", "task_id": trip.id})])
+def test_several_title_matches_ask_before_any_change(service):
+    service.create_task("Beach day")
+    service.create_task("Beach trip")
+    identifier = ScriptedModel([AIMessage(content=json.dumps({"task_id": "invented"}))])
+    base = ScriptedModel([base_decision(True, "", {"action": "create", "title": "Beach"})])
 
-    run_turn(
+    turn = run_turn(
         service,
         "change Beach day and Beach trip",
         "summary",
@@ -591,7 +635,78 @@ def test_identifier_runs_when_several_titles_match(service):
         identifier=identifier,
     )
 
-    assert identifier.seen
-    prompt = base.seen[0][0].content
-    assert trip.id in prompt
-    assert "Beach day" not in prompt
+    assert identifier.seen == []
+    assert base.seen == []
+    assert len(service.list_tasks()) == 2
+    assert "More than one task matches" in turn.reply
+    assert set(service.get_intake()["choices"]) == {task.id for task in service.list_tasks()}
+
+
+def test_two_ongoing_shopping_lists_are_named_before_an_alarm_is_added(service):
+    first = service.create_task("shopping list")
+    second = service.create_task("shopping list")
+    service.update_task(first.id, ongoing=True)
+    service.update_task(second.id, ongoing=True)
+    base = ScriptedModel([base_decision(True, "", {"action": "create", "title": "shopping list"})])
+
+    turn = run_turn(
+        service,
+        "set an alarm for my shopping list on the 8th of november at 4pm",
+        "summary",
+        base,
+        ScriptedModel([]),
+        ScriptedModel([]),
+    )
+
+    assert len(service.list_tasks()) == 2
+    assert base.seen == []
+    assert turn.reply == "You have 2 ongoing tasks named shopping list. Which one should I add the alarm to?"
+    assert service.get_task(first.id).alarms == []
+    assert service.get_task(second.id).alarms == []
+
+
+def test_a_choice_of_shopping_list_updates_that_task_instead_of_creating_one(service):
+    first = service.create_task("shopping list")
+    second = service.create_task("shopping list")
+    service.update_task(first.id, ongoing=True)
+    service.update_task(second.id, ongoing=True)
+    service.set_intake(
+        {
+            "choices": [first.id, second.id],
+            "asked": "set an alarm for my shopping list on the 8th of november at 4pm",
+        }
+    )
+    when = "2026-11-08T16:00:00+02:00"
+    base = ScriptedModel(
+        [base_decision(True, "", {"action": "update", "task_id": second.id, "alarm": when})]
+    )
+    editor = ScriptedModel(
+        [
+            editor_call("update_task", {"task_id": second.id}),
+            editor_call("set_alarm", {"task_id": second.id, "when": when}),
+        ]
+    )
+    reviewer = ScriptedModel([reviewer_reply("The alarm is set.")])
+
+    turn = run_turn(service, "the second one", "summary", base, editor, reviewer)
+
+    assert len(service.list_tasks()) == 2
+    assert service.get_task(second.id).alarms[0].fires_at.hour == 16
+    assert service.get_task(first.id).alarms == []
+    assert second.id in base.seen[0][0].content
+    assert "The alarm is set." in turn.reply
+
+
+def test_a_create_is_refused_while_the_user_still_has_to_choose(service):
+    first = service.create_task("shopping list")
+    second = service.create_task("shopping list")
+    service.update_task(first.id, ongoing=True)
+    service.update_task(second.id, ongoing=True)
+    service.set_intake({"choices": [first.id, second.id], "asked": "set an alarm for my shopping list"})
+    base = ScriptedModel([base_decision(True, "", {"action": "create", "title": "shopping list"})])
+
+    turn = run_turn(service, "the ongoing one", "summary", base, ScriptedModel([]), ScriptedModel([]))
+
+    assert len(service.list_tasks()) == 2
+    assert service.get_intake()["choices"] == [first.id, second.id]
+    assert turn.reply == "Which one should I change?"

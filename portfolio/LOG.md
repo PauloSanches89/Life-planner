@@ -491,3 +491,48 @@
 - Delta: Removed `OLLAMA_NUM_PREDICT` and `num_predict` from every `ChatOllama` client.
 - Why: The cap was used up by thinking, so the JSON reply came back empty.
 - Result: eval not rerun
+
+### 2026-11-03 — prompt change
+
+- By: user
+- Step: Have the reviewer offer a missing detail instead of explaining an alarm.
+- Target: system, `planner/graph.py`
+- Delta: `REVIEWER_PROMPT` says to confirm what was saved in one sentence, not to describe or correct an alarm, and when something asked for was not saved to ask one question. A missing alarm asks "Would you like me to set an alarm?" and sets offer to alarm.
+- Why: "go to the moon daily at 9pm" was saved, and the reviewer spent the reply on a one-time alarm for tomorrow.
+- Result: eval not rerun
+
+### 2026-11-03 — prompt change
+
+- By: user
+- Step: Let the base model answer the reviewer's offer.
+- Target: system, `planner/graph.py`
+- Delta: `BASE_PROMPT` says reviewer_reply is the question just asked, offer is the detail, and asked is the original request. Agreement sets action update and fills that detail. An alarm uses a named time, or the time in asked. A decline is action answer.
+- Why: A yes to the alarm question has to update that task and go to the editor.
+- Result: eval not rerun
+
+### 2026-11-03 — tool
+
+- By: user
+- Step: Keep the reviewer's offer for the next turn.
+- Target: tool, `planner/graph.py`
+- Delta: A successful save with an offer stores task_id, reviewer_reply, offer, and asked. The next message starts at the base with those fields. An update that names no task keeps that task id.
+- Why: The question has to hand the following answer to the base model with the saved task still chosen.
+- Result: eval not rerun
+
+### 2026-11-03 — tool
+
+- By: user
+- Step: Ask which task when one title matches more than one task.
+- Target: tool, `planner/graph.py`
+- Delta: More than one title hit asks which task and stores those ids. It does not call the identifier or create a task. Two ongoing tasks named shopping list are asked as "You have 2 ongoing tasks named shopping list. Which one should I add the alarm to?" The next message may update only one of those ids. A create while that choice is open is not saved.
+- Why: "set an alarm for my shopping list" created a new task while two ongoing shopping lists already existed.
+- Result: eval not rerun
+
+### 2026-11-03 — prompt change
+
+- By: user
+- Step: Tell the base model to update one of the listed choices.
+- Target: system, `planner/graph.py`
+- Delta: `BASE_PROMPT` says choices are the only tasks this message may change, to set action update and one of those ids, and not to create a task while choices are set.
+- Why: The answer to the shopping-list question has to edit one existing list.
+- Result: eval not rerun

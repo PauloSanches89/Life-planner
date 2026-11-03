@@ -52,7 +52,18 @@ BASE_PROMPT = (
     "and explain those requirements in your own words. Do not ask them to choose an existing task. "
     "A list is action create. Its title is the list name, such as shopping list. s hopping means shopping. "
     "When ready is false, write your own short polite question in reply about what is still missing. "
-    "Leave reply empty when ready is true."
+    "Leave reply empty when ready is true. "
+    "reviewer_reply is the question the user was just asked. offer is the detail that question is about. "
+    "asked is the request that question came from. "
+    "When offer is set and the user agrees, set action to update and fill that detail from their answer and from asked. "
+    "When the offer is alarm and they agree, set the alarm. "
+    "If they name a time, or asked names a time, put an ISO datetime with a timezone offset in alarm. "
+    "If they agree and no time is known, set alarm to yes and ask what time. "
+    "When they decline, set action to answer and acknowledge in reply. "
+    "When they change the subject, ignore reviewer_reply, offer, and asked. "
+    "choices are the only tasks this message may change. "
+    "Set action to update and task_id to one of those ids. Do not create a task while choices are set. "
+    "If they still do not say which one, set ready to false and ask which one."
 )
 
 EDITOR_PROMPT = (
@@ -74,8 +85,13 @@ IDENTIFIER_PROMPT = (
 )
 
 REVIEWER_PROMPT = (
-    "You write the reply the user will read. Reply with JSON only: {\"reply\": \"...\"}. "
-    "Be helpful and polite. Base the reply only on the tool result. "
+    "You write the reply the user will read. Reply with JSON only: {\"reply\": \"...\", \"offer\": \"\"}. "
+    "Be helpful and polite. Say what was saved in one short sentence. "
+    "Do not describe, correct, or explain an alarm. Do not say what the app cannot do. "
+    "If the user asked for something that was not saved, ask one short question offering to add it "
+    "and set offer to that detail. "
+    "For a missing alarm, ask \"Would you like me to set an alarm?\" and set offer to alarm. "
+    "When nothing they asked for is missing, leave offer empty. "
     "Do not claim a step that is not in the steps list."
 )
 
@@ -87,6 +103,7 @@ class PlannerState(TypedDict, total=False):
     ready: bool
     outcome: dict
     reply: str
+    offer: str
     task_id: str | None
 
 
@@ -112,6 +129,7 @@ def run_planner(
                 "ready": False,
                 "outcome": {},
                 "reply": "",
+                "offer": "",
                 "task_id": None,
             }
         )
@@ -120,12 +138,24 @@ def run_planner(
     except Exception as exc:
         raise RuntimeError(_model_error(exc)) from exc
     outcome = result.get("outcome") or {}
+    reply = (result.get("reply") or "").strip()
     if result.get("ready") and outcome.get("ok"):
-        service.set_intake({})
+        offer = str(result.get("offer") or "").strip()
+        saved_id = ((outcome.get("task") or {}).get("id")) or result.get("task_id")
+        if offer and saved_id:
+            service.set_intake(
+                {
+                    "task_id": saved_id,
+                    "reviewer_reply": reply,
+                    "offer": offer,
+                    "asked": user_text,
+                }
+            )
+        else:
+            service.set_intake({})
         _record_note(service, outcome)
     else:
         service.set_intake(result.get("intake") or {})
-    reply = (result.get("reply") or "").strip()
     _remember_turn(service, user_text, reply, result, chat_session_id)
     return Turn(reply, selected, result.get("task_id"))
 
@@ -149,8 +179,16 @@ def compile_planner(
         intake = state.get("intake") or {}
         user_text = state.get("user_text") or ""
         shown = str(intake.get("task_id") or "").strip()
+        if intake.get("choices") and not _wants_new_task(user_text):
+            return _ask_base(state, shown, intake)
         if not shown and intake.get("action") != "create" and not _wants_new_task(user_text):
             hits = _title_hits(user_text, service.list_tasks())
+            if len(hits) > 1:
+                return {
+                    "intake": {"choices": [task.id for task in hits], "asked": user_text},
+                    "ready": False,
+                    "reply": _clarify_matches(user_text, hits),
+                }
             if len(hits) == 1:
                 shown = hits[0].id
             elif identifier is not None:
@@ -166,6 +204,10 @@ def compile_planner(
             "selected_day": service.get_selected_day().isoformat(),
             "mode": state.get("mode") or "summary",
             "intake": previous,
+            "reviewer_reply": previous.get("reviewer_reply") or "",
+            "offer": previous.get("offer") or "",
+            "asked": previous.get("asked") or "",
+            "choices": _choice_rows(service, previous.get("choices") or []),
             "task_state": _chosen_task(service, task_key),
             "task_sessions": service.earlier_task_sessions(task_key, chat_session_id) if task_key else [],
         }
@@ -256,7 +298,8 @@ def compile_planner(
         )
         parsed = _parse_json(message_text(message)) or {}
         reply = parsed.get("reply") if isinstance(parsed.get("reply"), str) else ""
-        return {"reply": reply.strip()}
+        offer = parsed.get("offer") if isinstance(parsed.get("offer"), str) else ""
+        return {"reply": reply.strip(), "offer": offer.strip()}
 
     graph = StateGraph(PlannerState)
     graph.add_node("base", base_node)
@@ -276,6 +319,8 @@ def _after_base(state: PlannerState) -> Literal["editor", "__end__"]:
 
 
 def _base_decision(content: str, user_text: str, previous: dict, service: PlannerService) -> dict:
+    choices = [item for item in (previous.get("choices") or []) if isinstance(item, str) and item]
+    asked = previous.get("asked") or user_text
     payload = _parse_json(content) or {}
     incoming = _clean_intake(payload.get("intake"))
     previous = _blank_new_task(previous, incoming, service)
@@ -283,6 +328,15 @@ def _base_decision(content: str, user_text: str, previous: dict, service: Planne
     intake = _assign_task_id(intake, previous, service, user_text)
     reply = payload.get("reply") if isinstance(payload.get("reply"), str) else ""
     reply = reply.strip()
+    action = str(intake.get("action") or "")
+    if choices and not _wants_new_task(user_text):
+        chosen = str(intake.get("task_id") or "")
+        if action != "update" or chosen not in set(choices):
+            return {
+                "intake": {"choices": choices, "asked": asked},
+                "ready": False,
+                "reply": reply or "Which one should I change?",
+            }
     if _apply_date_policy(user_text, intake, service.today(), service.get_selected_day()):
         if _asks(intake) >= 2:
             _default_duration(intake)
@@ -292,7 +346,6 @@ def _base_decision(content: str, user_text: str, previous: dict, service: Planne
             return {"intake": intake, "ready": False, "reply": reply}
     _normalize_alarm(intake)
     _default_duration(intake)
-    action = str(intake.get("action") or "")
     if action == "answer":
         return {"intake": {}, "ready": False, "reply": reply}
     ask = _next_question(intake, service)
@@ -402,6 +455,9 @@ def _assign_task_id(intake: dict, previous: dict, service: PlannerService, user_
     if action in {"update", "delete"}:
         if proposed in live:
             return intake
+        if previous.get("offer") and previous_id in live:
+            intake["task_id"] = previous_id
+            return intake
         matched = _match_task(user_text, service.list_tasks()) or _match_title(str(intake.get("title") or ""), service.list_tasks())
         if matched:
             intake["task_id"] = matched
@@ -419,6 +475,50 @@ def _wants_new_task(user_text: str) -> bool:
     if any(phrase in text for phrase in ("new task", "make a task", "make an ongoing", "add a task")):
         return True
     return re.search(r"\bcreate\b", text) is not None
+
+
+def _clarify_matches(user_text: str, hits: list) -> str:
+    """Ask which task, before any edit, when one title matches more than one task."""
+    title = hits[0].title.strip()
+    same = all(task.title.strip().lower() == title.lower() for task in hits)
+    ongoing = [task for task in hits if task.ongoing]
+    if same and len(ongoing) > 1:
+        lead = f"You have {len(ongoing)} ongoing tasks named {title}."
+    elif same:
+        lead = f"You have {len(hits)} tasks named {title}."
+    else:
+        lead = "More than one task matches."
+    change = "add the alarm to" if "alarm" in user_text.lower() else "change"
+    if same and len(ongoing) == len(hits):
+        return f"{lead} Which one should I {change}?"
+    details = []
+    for task in hits:
+        if task.ongoing:
+            details.append(f"{task.title}, ongoing")
+        elif task.start_date:
+            details.append(f"{task.title}, {task.start_date.isoformat()}")
+        else:
+            details.append(task.title)
+    return f"{lead} Which one should I {change}? " + "; ".join(details) + "."
+
+
+def _choice_rows(service: PlannerService, ids: list) -> list[dict]:
+    rows = []
+    for task_id in ids:
+        if not isinstance(task_id, str):
+            continue
+        saved = _saved_task(service, task_id)
+        if not saved:
+            continue
+        rows.append(
+            {
+                "id": saved["id"],
+                "title": saved["title"],
+                "ongoing": saved.get("ongoing") is True,
+                "start_date": saved.get("start_date"),
+            }
+        )
+    return rows
 
 
 def _title_hits(user_text: str, tasks: list) -> list:
