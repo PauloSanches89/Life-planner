@@ -329,3 +329,12 @@
 - Delta: `reviewer_node` always calls the reviewer. It no longer returns `factual_reply(outcome)` early.
 - Why: Skipping the reviewer to shorten the wait was abandoned before it was committed.
 - Result: eval not rerun
+
+### 2026-11-03 — model change
+
+- By: user
+- Step: Leave Ollama reasoning on.
+- Target: model, `planner/server.py`
+- Delta: Removed `reasoning=False` from the base, editor, and reviewer `ChatOllama` clients.
+- Why: With thinking off, `qwen3:4b` does nothing. The line had been added again while diagnosing a failed save.
+- Result: eval not rerun

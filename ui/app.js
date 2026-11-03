@@ -902,10 +902,14 @@ async function boot() {
   if (started) return;
   started = true;
   const response = await fetch("/api/session", { credentials: "same-origin" });
+  const session = await response.json();
   if (response.status === 401) {
-    showGate(await response.json());
+    showGate(session);
     return;
   }
+  chatMessages = (Array.isArray(session.chat) ? session.chat : []).filter(
+    (entry) => entry && (entry.role === "user" || entry.role === "assistant") && typeof entry.text === "string"
+  );
   document.getElementById("gate").hidden = true;
   document.getElementById("app").hidden = false;
   renderChat();

@@ -252,6 +252,29 @@ def test_remembered_login_opens_the_planner_after_a_restart(tmp_path, clock):
     assert third.sessions == {}
 
 
+def test_chat_history_returns_with_the_same_login(tmp_path, clock):
+    key = load_master_key("", tmp_path)
+    ui = Path(__file__).resolve().parent.parent / "ui"
+    first = PlannerApp(blank_settings(), tmp_path, clock, key, ui)
+    session_id = first.sign_in_for_tests("auth0|ada", "Ada", remember=True)
+    session = first.sessions[session_id]
+    session.append_chat("user", "read my tasks")
+    session.append_chat("assistant", "You have none.")
+    first._remember(session_id, session)
+
+    second = PlannerApp(blank_settings(), tmp_path, clock, key, ui)
+    httpd = second.serve(0)
+    try:
+        status, body = call(httpd.server_address[1], "GET", "/api/session", cookie=session_id)
+        assert status == 200
+        assert body["chat"] == [
+            {"role": "user", "text": "read my tasks"},
+            {"role": "assistant", "text": "You have none."},
+        ]
+    finally:
+        second.stop()
+
+
 def test_remembered_login_expires_after_thirty_days(tmp_path, clock):
     key = load_master_key("", tmp_path)
     ui = Path(__file__).resolve().parent.parent / "ui"
@@ -321,6 +344,12 @@ def test_http_api_keeps_each_signed_in_user_separate(tmp_path, clock):
         assert status == 200
         assert chat["ok"] is False
         assert "GEMINI_API_KEY" in chat["error"]
+        status, signed_in = call(port, "GET", "/api/session", cookie=ada)
+        assert status == 200
+        assert signed_in["chat"] == [
+            {"role": "user", "text": "read my tasks for today"},
+            {"role": "assistant", "text": chat["error"]},
+        ]
 
         page, html, _headers = call_text(port, "GET", "/")
         assert page == 200

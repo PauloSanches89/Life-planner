@@ -64,6 +64,7 @@ class Session:
         self.picture = picture
         self.view = ViewState()
         self._chat_status = ""
+        self._chat_log: list[dict] = []
         self._chat_status_lock = threading.Lock()
 
     def set_chat_status(self, text: str) -> None:
@@ -73,6 +74,18 @@ class Session:
     def read_chat_status(self) -> str:
         with self._chat_status_lock:
             return self._chat_status
+
+    def append_chat(self, role: str, text: str) -> None:
+        if role not in {"user", "assistant"} or not isinstance(text, str) or not text.strip():
+            return
+        with self._chat_status_lock:
+            self._chat_log.append({"role": role, "text": text})
+            if len(self._chat_log) > 80:
+                del self._chat_log[:-80]
+
+    def read_chat(self) -> list[dict]:
+        with self._chat_status_lock:
+            return [dict(item) for item in self._chat_log]
 
 
 class ActiveBooks:
@@ -317,6 +330,22 @@ class PlannerApp:
         self._forget()
         _send_json(handler, 200, {"ok": True}, clear_cookie=True)
 
+    def _persist_session(self, session: Session) -> None:
+        path = self._session_path()
+        if not path.is_file():
+            return
+        session_id = next((key for key, value in self.sessions.items() if value is session), None)
+        if session_id is None:
+            return
+        try:
+            envelope = json.loads(path.read_text(encoding="utf-8"))
+            saved = json.loads(open_local(self.master_key, SESSION_AAD, envelope).decode("utf-8"))
+        except (OSError, StoreError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+            return
+        if saved.get("id") != session_id:
+            return
+        self._remember(session_id, session)
+
     def _remember(self, session_id: str, session: Session) -> None:
         expires = int(self.clock.now().timestamp()) + SESSION_MAX_AGE
         payload = json.dumps(
@@ -326,6 +355,7 @@ class PlannerApp:
                 "name": session.name,
                 "picture": session.picture,
                 "expires": expires,
+                "chat": session.read_chat(),
             },
             ensure_ascii=False,
         ).encode("utf-8")
@@ -354,7 +384,11 @@ class PlannerApp:
             if not isinstance(name, str) or not name:
                 raise ValueError("incomplete")
             picture = data.get("picture")
-            self.sessions[session_id] = Session(sub, name, picture if isinstance(picture, str) else None)
+            session = Session(sub, name, picture if isinstance(picture, str) else None)
+            for item in data.get("chat") or []:
+                if isinstance(item, dict) and isinstance(item.get("text"), str):
+                    session.append_chat(str(item.get("role") or ""), item["text"])
+            self.sessions[session_id] = session
         except (OSError, StoreError, json.JSONDecodeError, KeyError, TypeError, ValueError):
             path.unlink(missing_ok=True)
 
@@ -379,7 +413,7 @@ class PlannerApp:
         _send_json(
             handler,
             200,
-            {"ok": True, "display_name": session.name, "avatar_url": session.picture},
+            {"ok": True, "display_name": session.name, "avatar_url": session.picture, "chat": session.read_chat()},
         )
 
     def _rpc(self, session: Session, body: dict) -> tuple[int, dict]:
@@ -399,17 +433,20 @@ class PlannerApp:
         message = body.get("message")
         if not isinstance(message, str) or not message.strip():
             return 400, {"ok": False, "error": "Message is required"}
+        text = message.strip()
+        session.append_chat("user", text)
+        self._persist_session(session)
         if not self.settings.chat_configured:
-            return 200, {
-                "ok": False,
-                "error": "Set OLLAMA_MODEL in .env, or GEMINI_API_KEY, or the Azure OpenAI names listed in .env.example.",
-            }
+            error = "Set OLLAMA_MODEL in .env, or GEMINI_API_KEY, or the Azure OpenAI names listed in .env.example."
+            session.append_chat("assistant", error)
+            self._persist_session(session)
+            return 200, {"ok": False, "error": error}
         base, editor, reviewer = self._chat_models()
         session.set_chat_status("Reading your message")
         try:
             turn = run_turn(
                 self.service_for(session),
-                message.strip(),
+                text,
                 session.view.mode,
                 base,
                 editor,
@@ -417,12 +454,17 @@ class PlannerApp:
                 session.set_chat_status,
             )
         except RuntimeError as exc:
+            session.append_chat("assistant", str(exc))
+            self._persist_session(session)
             return 200, {"ok": False, "error": str(exc)}
         finally:
             session.set_chat_status("")
         session.view.mode = turn.mode
         payload = self.api_for(session).snapshot(turn.task_id)
-        payload["reply"] = turn.reply
+        reply = turn.reply or "Done."
+        session.append_chat("assistant", reply)
+        self._persist_session(session)
+        payload["reply"] = reply
         return 200, payload
 
     def _chat_models(self):
