@@ -1,0 +1,35 @@
+---
+description: When an implementation detail is not already decided, offer sound options that follow common practice instead of picking one and building it.
+alwaysApply: true
+---
+
+# Unclear implementation
+
+When an implementation detail is unclear, do not implement the approach you think would work. Offer options that make sense and follow industry best practices.
+
+A detail is unclear when the request does not decide it and this repo does not already settle it. Examples: where state lives, which library to add, the shape of an API, how errors are handled, how data is stored.
+
+Each option:
+
+- Name the approach
+- Say why it fits this problem
+- Follow a common practice for this kind of work
+- State the tradeoff in one line
+
+Offer two or three options. Recommend one and say why. Wait for a choice before writing that code.
+
+Proceed without asking only when the user already chose, this repo already has a pattern for the same decision, or one approach is the ordinary one and the others would be unusual.
+
+## Example
+
+The user says "remember the last plan they opened." Storage is not specified, and the repo has no persistence pattern.
+
+Do not add `localStorage` and move on.
+
+Offer:
+
+1. Browser storage — ordinary for a single-user app on one device; lost if site data is cleared.
+2. A small server and database — ordinary when the plan must follow them across devices; more to build and run.
+3. Export and import a file — ordinary when they should own the data; not automatic.
+
+Recommend the option that matches how the app is already deployed, then wait.

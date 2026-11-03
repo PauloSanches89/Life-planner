@@ -21,10 +21,11 @@ from planner.service import PlannerService
 BASE_PROMPT = (
     "You read the user and fill intake. You do not create, edit, or delete tasks yourself. "
     "Return JSON only, with keys ready, reply, and intake. "
-    "On this message, decide whether they want a new task or a change to a task already in the list. "
+    "On this message, decide whether they want a new task or a change to the chosen task. "
     "A new task uses action create and an empty task_id. The app assigns the id. Do not invent an id. "
-    "An edit uses action update and that task's id from the tasks list. "
-    "Delete and restore use those actions and the id from the tasks or deleted list. "
+    "An edit uses action update and the id in task_state. "
+    "Delete and restore use those actions and the id in task_state. "
+    "When task_state is empty and this is not a new task, ask which task. "
     "Leave start_date and end_date empty unless the user states a duration, such as 5 November to 10 November. "
     "An empty duration stays ongoing. "
     "Set alarm to yes or no. If they name a time, put an ISO datetime with a timezone offset in alarm. "
@@ -55,11 +56,21 @@ BASE_PROMPT = (
 )
 
 EDITOR_PROMPT = (
-    "Apply the state by calling tools. Do not write a message to the user. Do not invent fields. "
-    "Call create_task for a new task, or update_task for an edit, with the title, description, duration, location, and subtasks. "
+    "You call tools. Think in one short sentence, name the one tool the action requires, then stop thinking and call it. "
+    "Do not compare options. Do not write a message to the user. Do not invent fields. "
+    "action create calls create_task. action update calls update_task. "
+    "Pass the title, description, duration, location, and subtasks from state. "
     "Call set_alarm in a separate call only when alarm is a datetime. "
     "Call add_link in a separate call for each link. "
-    "When action is delete, call only delete_task. When action is restore, call only restore_task."
+    "action delete calls only delete_task. action restore calls only restore_task."
+)
+
+IDENTIFIER_PROMPT = (
+    "You choose the one existing task the user means. Reply with JSON only: {\"task_id\": \"\"}. "
+    "tasks and deleted contain id and title only. "
+    "Set task_id to the one id the user means. "
+    "Leave task_id empty when none of the titles fit. "
+    "Do not invent an id."
 )
 
 REVIEWER_PROMPT = (
@@ -88,9 +99,10 @@ def run_planner(
     reviewer,
     on_status=None,
     chat_session_id: str | None = None,
+    identifier=None,
 ) -> Turn:
     selected = choose_mode(user_text, mode)
-    graph = compile_planner(service, base, editor, reviewer, on_status, chat_session_id)
+    graph = compile_planner(service, base, editor, reviewer, on_status, chat_session_id, identifier)
     try:
         result = graph.invoke(
             {
@@ -118,7 +130,15 @@ def run_planner(
     return Turn(reply, selected, result.get("task_id"))
 
 
-def compile_planner(service: PlannerService, base, editor, reviewer, on_status=None, chat_session_id: str | None = None):
+def compile_planner(
+    service: PlannerService,
+    base,
+    editor,
+    reviewer,
+    on_status=None,
+    chat_session_id: str | None = None,
+    identifier=None,
+):
     """Each user message starts at the base node. A finished edit returns there on the next message."""
     bucket: list[dict] = []
     tools = _editor_tools(service, bucket)
@@ -129,8 +149,14 @@ def compile_planner(service: PlannerService, base, editor, reviewer, on_status=N
         intake = state.get("intake") or {}
         user_text = state.get("user_text") or ""
         shown = str(intake.get("task_id") or "").strip()
-        if not shown and intake.get("action") != "create":
-            shown = _match_task(user_text, service.list_tasks())
+        if not shown and intake.get("action") != "create" and not _wants_new_task(user_text):
+            hits = _title_hits(user_text, service.list_tasks())
+            if len(hits) == 1:
+                shown = hits[0].id
+            elif identifier is not None:
+                _report_status(on_status, "Finding the task")
+                shown = _identify_task(identifier, user_text, service)
+                _report_status(on_status, "Reading your message")
         return _ask_base(state, shown, intake)
 
     def _ask_base(state: PlannerState, task_key: str, previous: dict) -> dict:
@@ -139,11 +165,8 @@ def compile_planner(service: PlannerService, base, editor, reviewer, on_status=N
             "today": service.today().isoformat(),
             "selected_day": service.get_selected_day().isoformat(),
             "mode": state.get("mode") or "summary",
-            "tasks": _compact_tasks(service),
-            "notes": service.get_task_notes(),
-            "deleted": service.list_deleted(),
             "intake": previous,
-            "task_state": _saved_task(service, task_key),
+            "task_state": _chosen_task(service, task_key),
             "task_sessions": service.earlier_task_sessions(task_key, chat_session_id) if task_key else [],
         }
         message = base.invoke(
@@ -391,16 +414,67 @@ def _assign_task_id(intake: dict, previous: dict, service: PlannerService, user_
     return intake
 
 
-def _match_task(user_text: str, tasks: list) -> str:
+def _wants_new_task(user_text: str) -> bool:
+    text = user_text.lower()
+    if any(phrase in text for phrase in ("new task", "make a task", "make an ongoing", "add a task")):
+        return True
+    return re.search(r"\bcreate\b", text) is not None
+
+
+def _title_hits(user_text: str, tasks: list) -> list:
     text = user_text.lower()
     hits = []
     for task in tasks:
         title = task.title.lower().strip()
         if len(title) >= 3 and title in text:
             hits.append(task)
+    return hits
+
+
+def _match_task(user_text: str, tasks: list) -> str:
+    hits = _title_hits(user_text, tasks)
     if len(hits) == 1:
         return hits[0].id
     return ""
+
+
+def _identify_task(identifier, user_text: str, service: PlannerService) -> str:
+    live = [{"id": task.id, "title": task.title} for task in service.list_tasks()]
+    deleted = [{"id": item["id"], "title": item["title"]} for item in service.list_deleted()]
+    allowed = {item["id"] for item in live + deleted}
+    message = identifier.invoke(
+        [
+            SystemMessage(content=IDENTIFIER_PROMPT),
+            HumanMessage(content=json.dumps({"message": user_text, "tasks": live, "deleted": deleted})),
+        ]
+    )
+    payload = _parse_json(message_text(message)) or {}
+    task_id = str(payload.get("task_id") or "").strip()
+    if task_id in allowed:
+        return task_id
+    return ""
+
+
+def _chosen_task(service: PlannerService, task_id: str) -> dict | None:
+    if not task_id:
+        return None
+    note = service.get_task_notes().get(task_id, "")
+    saved = _saved_task(service, task_id)
+    if saved:
+        if note:
+            saved["note"] = note
+        return saved
+    for item in service.list_deleted():
+        if item["id"] != task_id:
+            continue
+        return {
+            "id": item["id"],
+            "title": item["title"],
+            "start_date": item.get("start_date"),
+            "end_date": item.get("end_date"),
+            "note": item.get("note") or note,
+        }
+    return None
 
 
 def _match_title(title: str, tasks: list) -> str:
@@ -891,21 +965,6 @@ def _outcome(bucket: list[dict], action: str) -> dict:
         }
     last = bucket[-1]
     return {"ok": True, "action": last.get("action") or action, "error": "", "task": last.get("task")}
-
-
-def _compact_tasks(service: PlannerService) -> list[dict]:
-    items = []
-    for task in service.list_tasks():
-        items.append(
-            {
-                "id": task.id,
-                "title": task.title,
-                "start_date": task.start_date.isoformat() if task.start_date else None,
-                "end_date": task.end_date.isoformat() if task.end_date else None,
-                "ongoing": task.ongoing,
-            }
-        )
-    return items
 
 
 def _remember_turn(

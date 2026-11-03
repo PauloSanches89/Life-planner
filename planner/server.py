@@ -19,7 +19,13 @@ import uvicorn
 
 from planner.alarms import AlarmBook
 from planner.auth import AuthError, authorize_url, code_verifier, exchange_profile
-from planner.assistant import OLLAMA_CHAT_TIMEOUT, OLLAMA_KEEP_ALIVE, OneRetry, run_turn
+from planner.assistant import (
+    OLLAMA_CHAT_TIMEOUT,
+    OLLAMA_KEEP_ALIVE,
+    OLLAMA_NUM_CTX,
+    OneRetry,
+    run_turn,
+)
 from planner.bridge import JsApi, ViewState
 from planner.clock import Clock
 from planner.crypto import open_local, seal_local
@@ -464,7 +470,7 @@ class PlannerApp:
             session.append_chat("assistant", error)
             self._save_chat(session)
             return 200, {"ok": False, "error": error}
-        base, editor, reviewer = self._chat_models()
+        base, editor, reviewer, identifier = self._chat_models()
         session.set_chat_status("Reading your message")
         try:
             turn = run_turn(
@@ -476,6 +482,7 @@ class PlannerApp:
                 reviewer,
                 session.set_chat_status,
                 session.chat_session_id,
+                identifier,
             )
         except RuntimeError as exc:
             session.append_chat("assistant", str(exc))
@@ -500,6 +507,7 @@ class PlannerApp:
                 "base_url": self.settings.ollama_base_url,
                 "temperature": 0.2,
                 "keep_alive": OLLAMA_KEEP_ALIVE,
+                "num_ctx": OLLAMA_NUM_CTX,
                 "client_kwargs": {"timeout": OLLAMA_CHAT_TIMEOUT},
             }
 
@@ -508,7 +516,8 @@ class PlannerApp:
 
             return (
                 ollama(format="json"),
-                ollama(reasoning=False),
+                ollama(reasoning=True),
+                ollama(format="json"),
                 ollama(format="json"),
             )
         if self.settings.gemini_api_key:
@@ -521,7 +530,7 @@ class PlannerApp:
                     temperature=0.2,
                 )
 
-            return gemini(), gemini(), gemini()
+            return gemini(), gemini(), gemini(), gemini()
         from langchain_openai import AzureChatOpenAI
 
         def azure(deployment: str) -> AzureChatOpenAI:
@@ -537,6 +546,7 @@ class PlannerApp:
             azure(self.settings.azure_assistant_deployment),
             azure(self.settings.azure_assistant_deployment),
             azure(self.settings.azure_checker_deployment),
+            azure(self.settings.azure_assistant_deployment),
         )
 
     def _session(self, handler: _Exchange) -> Session | None:

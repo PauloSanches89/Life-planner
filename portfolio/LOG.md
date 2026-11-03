@@ -401,3 +401,93 @@
 - Delta: Each Ollama chat client waits 90 seconds for the next response byte. `OneRetry` runs that call one more time after `httpx.TimeoutException`. A second timeout becomes "The assistant took too long. Try again."
 - Why: A chat request stayed open while the runner had processed none of the prompt, and the page kept spinning.
 - Result: eval not rerun
+
+### 2026-11-03 — model change
+
+- By: user
+- Step: Give a slow Ollama call five minutes before it times out.
+- Target: model, `planner/assistant.py`
+- Delta: `OLLAMA_CHAT_TIMEOUT` is 300 seconds. One retry after that timeout is unchanged.
+- Why: The local Ollama calls are slower than a 90-second wait.
+- Result: eval not rerun
+
+### 2026-11-03 — prompt change
+
+- By: user
+- Step: Ask a small identifier model only when the title match misses or hits more than one task.
+- Target: system, `planner/graph.py`
+- Delta: `IDENTIFIER_PROMPT` receives titles and ids. The base prompt then receives the one chosen task, its note, and its session summaries. A create skips the identifier. The base prompt no longer includes the full task list, notes, or deleted list.
+- Why: The base call was carrying every task into a 4,096-token window.
+- Result: eval not rerun
+
+### 2026-11-03 — model change
+
+- By: user
+- Step: Give the local model an 8192-token context.
+- Target: model, `planner/assistant.py`, `planner/server.py`
+- Delta: `OLLAMA_NUM_CTX = 8192`. Each `ChatOllama` client sets `num_ctx` to that. The warmup `/api/generate` body sets `options.num_ctx` to the same value.
+- Why: A 3,957-token prompt was loaded into a 4,096-token window and the runner processed none of it.
+- Result: eval not rerun
+
+### 2026-11-03 — model change
+
+- By: agent
+- Step: Cap each local model call at 1024 generated tokens.
+- Target: model, `planner/server.py`
+- Delta: `OLLAMA_NUM_PREDICT = 1024` is set as `num_predict` on every `ChatOllama` client.
+- Why: With the 8192 window loaded, the next chat still sat at 8168 prompt tokens and 0 processed. The task list is 5 titles. Thinking before the JSON reply had filled the window, so the reply pass never started.
+- Result: eval not rerun
+
+### 2026-11-03 — model change
+
+- By: user
+- Step: Double the local context window to 16384.
+- Target: model, `planner/assistant.py`
+- Delta: `OLLAMA_NUM_CTX = 16384`. Chat clients and the warmup request both read that constant.
+- Why: The user asked to double the 8192 window.
+- Result: eval not rerun
+
+### 2026-11-03 — tool
+
+- By: user
+- Step: Save a collected create or update when the editor returns no tool call.
+- Target: tool, `planner/graph.py`
+- Delta: `_save_collected` runs `create_task` or `update_task` from the intake, then `set_alarm` when the alarm is a datetime and `add_link` for each link.
+- Why: "i need to go to the moon daily at 9pm" was answered with "The editor didn't make any changes" and nothing was saved.
+- Result: eval not rerun
+
+### 2026-11-03 — tool
+
+- By: user
+- Step: Stop saving a task when the editor returns no tool call.
+- Target: tool, `planner/graph.py`
+- Delta: Removed `_save_collected` and the call that ran it after an empty tool-call list.
+- Why: The user asked to revert that save. A create again waits for the editor to call the tool.
+- Result: eval not rerun
+
+### 2026-11-03 — model change
+
+- By: user
+- Step: Turn thinking on for the editor.
+- Target: model, `planner/server.py`
+- Delta: The middle `ChatOllama` client is constructed with `reasoning=True`.
+- Why: The editor had thinking off and returned no tool call.
+- Result: eval not rerun
+
+### 2026-11-03 — prompt change
+
+- By: user
+- Step: Tell the editor to think one sentence and then call the tool.
+- Target: system, `planner/graph.py`
+- Delta: `EDITOR_PROMPT` says to think in one short sentence, name the one tool the action requires, stop thinking, and call it. It names create_task, update_task, set_alarm, add_link, delete_task, and restore_task.
+- Why: The editor should reason briefly and call the tool instead of talking or searching for options.
+- Result: eval not rerun
+
+### 2026-11-03 — model change
+
+- By: user
+- Step: Remove the 1024-token generation cap.
+- Target: model, `planner/assistant.py`, `planner/server.py`
+- Delta: Removed `OLLAMA_NUM_PREDICT` and `num_predict` from every `ChatOllama` client.
+- Why: The cap was used up by thinking, so the JSON reply came back empty.
+- Result: eval not rerun

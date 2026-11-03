@@ -21,7 +21,8 @@ from planner.service import PlannerService
 
 OLLAMA_KEEP_ALIVE = "2m"
 OLLAMA_REFRESH_SECONDS = 30
-OLLAMA_CHAT_TIMEOUT = 90
+OLLAMA_CHAT_TIMEOUT = 300
+OLLAMA_NUM_CTX = 16384
 
 
 def ensure_ollama(base_url: str, opener=None, finder=None, popen=None, sleep=None, attempts: int = 40) -> bool:
@@ -112,7 +113,9 @@ class OllamaWarmup:
 def _ollama_keep_alive(base_url: str, model: str, keep_alive: int | str, opener, timeout: float) -> None:
     request = Request(
         f"{base_url}/api/generate",
-        data=json.dumps({"model": model, "keep_alive": keep_alive}).encode("utf-8"),
+        data=json.dumps(
+            {"model": model, "keep_alive": keep_alive, "options": {"num_ctx": OLLAMA_NUM_CTX}}
+        ).encode("utf-8"),
         method="POST",
         headers={"Content-Type": "application/json"},
     )
@@ -167,11 +170,12 @@ def run_turn(
     reviewer,
     on_status=None,
     chat_session_id: str | None = None,
+    identifier=None,
 ) -> Turn:
     """Run one user message through the base, editor, and reviewer graph."""
     from planner.graph import run_planner
 
-    return run_planner(service, user_text, mode, base, editor, reviewer, on_status, chat_session_id)
+    return run_planner(service, user_text, mode, base, editor, reviewer, on_status, chat_session_id, identifier)
 
 
 def _span_from_arguments(arguments: dict) -> tuple[date | None, date | None]:

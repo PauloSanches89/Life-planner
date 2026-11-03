@@ -285,7 +285,16 @@ def test_a_deleted_task_note_lets_the_next_turn_restore_that_task(service):
     ])
     editor = ScriptedModel([editor_call("restore_task", {"task_id": task.id})])
     reviewer = ScriptedModel([reviewer_reply("Go to Beach successfully restored")])
-    restored = run_turn(service, "reinstate the Go to Beach deletion", "summary", base, editor, reviewer)
+    identifier = ScriptedModel([AIMessage(content=json.dumps({"task_id": task.id}))])
+    restored = run_turn(
+        service,
+        "reinstate the Go to Beach deletion",
+        "summary",
+        base,
+        editor,
+        reviewer,
+        identifier=identifier,
+    )
 
     prompt = base.seen[0][0].content
     assert "Go to Beach" in prompt
@@ -499,3 +508,90 @@ def test_two_sessions_for_one_task_each_keep_a_summary(service):
     assert "session-c" not in prompt
     still = service.earlier_task_sessions(beach.id, "session-c")
     assert [item["session_id"] for item in still] == ["session-a", "session-b"]
+
+
+def test_a_create_does_not_ask_the_identifier(service):
+    identifier = ScriptedModel([])
+    base = ScriptedModel([base_decision(False, "What should the task be called?", {"action": "create"})])
+
+    run_turn(
+        service,
+        "create a new task",
+        "summary",
+        base,
+        ScriptedModel([]),
+        ScriptedModel([]),
+        identifier=identifier,
+    )
+
+    assert identifier.seen == []
+
+
+def test_one_title_match_does_not_ask_the_identifier(service):
+    beach = service.create_task("Go to Beach")
+    identifier = ScriptedModel([])
+    base = ScriptedModel([base_decision(False, "Which day?", {"action": "update", "task_id": beach.id})])
+
+    run_turn(
+        service,
+        "move Go to Beach",
+        "summary",
+        base,
+        ScriptedModel([]),
+        ScriptedModel([]),
+        identifier=identifier,
+    )
+
+    assert identifier.seen == []
+
+
+def test_identifier_runs_when_no_title_matches(service):
+    beach = service.create_task("Go to Beach")
+    service.update_task(beach.id, description="Bring a towel")
+    dentist = service.create_task("Dentist")
+    service.record_task_session(beach.id, "session-a", "pack towels", "Noted for the beach.")
+    identifier = ScriptedModel([AIMessage(content=json.dumps({"task_id": beach.id}))])
+    base = ScriptedModel([base_decision(False, "Which day?", {"action": "update", "task_id": beach.id})])
+
+    run_turn(
+        service,
+        "move the beach outing",
+        "summary",
+        base,
+        ScriptedModel([]),
+        ScriptedModel([]),
+        identifier=identifier,
+    )
+
+    catalog = identifier.seen[0][1].content
+    assert beach.id in catalog
+    assert "Go to Beach" in catalog
+    assert dentist.id in catalog
+    assert "Dentist" in catalog
+    assert "pack towels" not in catalog
+    assert "Bring a towel" not in catalog
+    prompt = base.seen[0][0].content
+    assert "pack towels" in prompt
+    assert "Dentist" not in prompt
+
+
+def test_identifier_runs_when_several_titles_match(service):
+    day = service.create_task("Beach day")
+    trip = service.create_task("Beach trip")
+    identifier = ScriptedModel([AIMessage(content=json.dumps({"task_id": trip.id}))])
+    base = ScriptedModel([base_decision(False, "Which day?", {"action": "update", "task_id": trip.id})])
+
+    run_turn(
+        service,
+        "change Beach day and Beach trip",
+        "summary",
+        base,
+        ScriptedModel([]),
+        ScriptedModel([]),
+        identifier=identifier,
+    )
+
+    assert identifier.seen
+    prompt = base.seen[0][0].content
+    assert trip.id in prompt
+    assert "Beach day" not in prompt

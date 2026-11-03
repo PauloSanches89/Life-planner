@@ -5,7 +5,7 @@ from urllib.error import URLError
 
 import httpx
 
-from planner.assistant import OLLAMA_KEEP_ALIVE, OneRetry, OllamaWarmup, ensure_ollama
+from planner.assistant import OLLAMA_KEEP_ALIVE, OLLAMA_NUM_CTX, OneRetry, OllamaWarmup, ensure_ollama
 
 
 class ScriptedResponse:
@@ -39,7 +39,11 @@ def test_warmup_loads_the_model_until_the_app_closes():
     warmup.stop()
 
     assert calls[0][0] == "http://127.0.0.1:11434/api/generate"
-    assert calls[0][1] == {"model": "qwen3:4b", "keep_alive": OLLAMA_KEEP_ALIVE}
+    assert calls[0][1] == {
+        "model": "qwen3:4b",
+        "keep_alive": OLLAMA_KEEP_ALIVE,
+        "options": {"num_ctx": OLLAMA_NUM_CTX},
+    }
     assert "prompt" not in calls[0][1]
     assert calls[0][2] == 180
     assert calls[-1][1]["keep_alive"] == 0
