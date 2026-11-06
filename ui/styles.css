@@ -249,7 +249,7 @@ select:focus-visible {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--accent-deep);
+  background: #2f9d5c;
 }
 
 .day-dot.low {
@@ -264,9 +264,16 @@ select:focus-visible {
   background: #d23b3b;
 }
 
+.priority-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 10px 0;
+}
+
 .priority {
   align-self: flex-start;
-  margin: 6px 10px 0;
+  margin: 0;
   padding: 2px 8px;
   border: 1px solid var(--line);
   border-radius: 999px;
@@ -274,6 +281,16 @@ select:focus-visible {
   color: var(--muted);
   font-size: 12px;
   font-weight: 650;
+}
+
+.priority.selected {
+  box-shadow: inset 0 0 0 2px currentColor;
+}
+
+.priority.none.selected {
+  color: #1f7a45;
+  background: #e5f6ee;
+  border-color: #2f9d5c;
 }
 
 .priority.low {

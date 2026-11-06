@@ -152,7 +152,7 @@ function renderCards() {
       run(() => selectTask(item.id));
     });
     card.append(open);
-    if (item.priority) card.append(priorityButton(item));
+    if (item.priority) card.append(el("span", "priority " + item.priority, priorityLabel(item.priority)));
 
     const bubbles = el("div", "bubbles");
     if ((item.location || "").trim()) {
@@ -281,7 +281,7 @@ function renderDetail() {
     const id = task.id;
     run(() => pinTask(id));
   });
-  titleBlock.append(title, taskId, priorityButton(task));
+  titleBlock.append(title, taskId, priorityChoices(task));
   const remove = el("button");
   remove.id = "delete-task";
   remove.type = "button";
@@ -394,23 +394,26 @@ function priorityLabel(value) {
   return "Priority";
 }
 
-function nextPriority(value) {
-  const order = ["", "low", "medium", "high"];
-  const index = order.indexOf(value || "");
-  return order[(index + 1) % order.length];
-}
-
-function priorityButton(item) {
-  const button = el("button", "priority" + (item.priority ? " " + item.priority : ""), priorityLabel(item.priority));
-  button.type = "button";
-  button.title = "Change priority";
-  button.addEventListener("click", (event) => {
-    event.stopPropagation();
-    const id = item.id;
-    const next = nextPriority(item.priority);
-    run(() => savePriority(id, next));
+function priorityChoices(item) {
+  const row = el("div", "priority-choices");
+  [
+    ["", "None"],
+    ["low", "Low"],
+    ["medium", "Medium"],
+    ["high", "High"],
+  ].forEach(([value, label]) => {
+    const selected = (item.priority || "") === value;
+    const button = el("button", "priority" + (value ? " " + value : " none") + (selected ? " selected" : ""), label);
+    button.type = "button";
+    button.setAttribute("aria-pressed", selected ? "true" : "false");
+    button.addEventListener("click", () => {
+      if ((task.priority || "") === value) return;
+      const id = task.id;
+      run(() => savePriority(id, value));
+    });
+    row.append(button);
   });
-  return button;
+  return row;
 }
 
 function isoFromDate(date) {
