@@ -40,6 +40,7 @@ BASE_PROMPT = (
     "task_sessions are summaries of earlier chats about this task, one for each past session. "
     "They are not part of the current chat. "
     "task_state is the saved task when this is an edit. "
+    "When task_state is set, the user selected that task. Edit it. Do not create a task unless they ask for a new one. "
     "Fill intake to this schema and repair typos so the values are usable. "
     "action is create, update, delete, restore, or answer. "
     "title, description, and location are strings. A place named with for, at, or from goes in location. "
@@ -323,6 +324,15 @@ def _base_decision(content: str, user_text: str, previous: dict, service: Planne
     asked = previous.get("asked") or user_text
     payload = _parse_json(content) or {}
     incoming = _clean_intake(payload.get("intake"))
+    pinned_id = str(previous.get("task_id") or "").strip() if previous.get("pinned") is True else ""
+    if (
+        pinned_id
+        and pinned_id in {task.id for task in service.list_tasks()}
+        and not _wants_new_task(user_text)
+        and str(incoming.get("action") or "") == "create"
+    ):
+        incoming["action"] = "update"
+        incoming["task_id"] = pinned_id
     previous = _blank_new_task(previous, incoming, service)
     intake = _merge_intake(previous, incoming)
     intake = _assign_task_id(intake, previous, service, user_text)
@@ -455,14 +465,16 @@ def _assign_task_id(intake: dict, previous: dict, service: PlannerService, user_
     if action in {"update", "delete"}:
         if proposed in live:
             return intake
-        if previous.get("offer") and previous_id in live:
-            intake["task_id"] = previous_id
-            return intake
-        matched = _match_task(user_text, service.list_tasks()) or _match_title(str(intake.get("title") or ""), service.list_tasks())
+        matched = _match_task(user_text, service.list_tasks()) or _match_title(
+            str(intake.get("title") or ""), service.list_tasks()
+        )
         if matched:
             intake["task_id"] = matched
-        else:
-            intake.pop("task_id", None)
+            return intake
+        if previous_id in live:
+            intake["task_id"] = previous_id
+            return intake
+        intake.pop("task_id", None)
         return intake
     if action == "restore":
         if proposed not in deleted:

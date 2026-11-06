@@ -29,7 +29,7 @@ from planner.assistant import (
 from planner.bridge import JsApi, ViewState
 from planner.clock import Clock
 from planner.crypto import open_local, seal_local
-from planner.models import AlarmStatus, StoreError
+from planner.models import AlarmStatus, PlannerError, StoreError
 from planner.service import PlannerService
 from planner.settings import Settings
 from planner.user_store import auth_profile, open_user_store
@@ -39,6 +39,7 @@ RPC_ACTIONS = {
     "set_selected_day",
     "create_task",
     "update_task",
+    "focus_task",
     "delete_task",
     "add_subtask",
     "update_subtask",
@@ -470,6 +471,7 @@ class PlannerApp:
             session.append_chat("assistant", error)
             self._save_chat(session)
             return 200, {"ok": False, "error": error}
+        self._pin_for_chat(session, body.get("task_id"))
         base, editor, reviewer, identifier = self._chat_models()
         session.set_chat_status("Reading your message")
         try:
@@ -497,6 +499,20 @@ class PlannerApp:
         self._save_chat(session)
         payload["reply"] = reply
         return 200, payload
+
+    def _pin_for_chat(self, session: Session, task_id) -> None:
+        """Keep a clicked task selected when this message is not already collecting something else."""
+        if not isinstance(task_id, str) or not task_id.strip():
+            return
+        service = self.service_for(session)
+        try:
+            service.get_task(task_id.strip())
+        except PlannerError:
+            return
+        current = service.get_intake()
+        if current.get("action") or current.get("offer") or current.get("choices"):
+            return
+        service.set_intake({"task_id": task_id.strip(), "pinned": True})
 
     def _chat_models(self):
         if self.settings.ollama_model:

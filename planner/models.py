@@ -90,6 +90,7 @@ class Task:
     alarms: list[Alarm]
     ongoing: bool = False
     location: str = ""
+    priority: str = ""
 
 
 @dataclass
@@ -170,6 +171,7 @@ def task_to_dict(task: Task) -> dict:
         "end_date": task.end_date.isoformat() if task.end_date is not None else None,
         "ongoing": task.ongoing,
         "location": task.location,
+        "priority": task.priority,
         "created_at": task.created_at.isoformat(),
         "subtasks": [subtask_to_dict(item) for item in task.subtasks],
         "links": [link_to_dict(item) for item in task.links],
@@ -303,6 +305,11 @@ def task_from_dict(data: object) -> Task:
     location = ""
     if "location" in raw and raw["location"] is not None:
         location = _require_str(raw, "location", "task")
+    priority = ""
+    if "priority" in raw and raw["priority"] is not None:
+        priority = _require_str(raw, "priority", "task").strip().lower()
+        if priority not in {"", "low", "medium", "high"}:
+            raise StoreError(f"Unknown task priority: {priority}")
     if ongoing:
         start_date = _optional_date(raw, "start_date", "task")
         end_date = _optional_date(raw, "end_date", "task")
@@ -321,6 +328,7 @@ def task_from_dict(data: object) -> Task:
         alarms=[alarm_from_dict(item) for item in alarms_raw],
         ongoing=ongoing,
         location=location,
+        priority=priority,
     )
 
 

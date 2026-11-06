@@ -536,3 +536,21 @@
 - Delta: `BASE_PROMPT` says choices are the only tasks this message may change, to set action update and one of those ids, and not to create a task while choices are set.
 - Why: The answer to the shopping-list question has to edit one existing list.
 - Result: eval not rerun
+
+### 2026-11-06 — prompt change
+
+- By: user
+- Step: Tell the base model that a selected task is the one to edit.
+- Target: system, `planner/graph.py`
+- Delta: `BASE_PROMPT` adds "When task_state is set, the user selected that task. Edit it. Do not create a task unless they ask for a new one."
+- Why: Clicking a task id has to make the next message edit that task instead of creating another one with the same title.
+- Result: eval not rerun
+
+### 2026-11-06 — tool
+
+- By: user
+- Step: Pin the task whose id was clicked.
+- Target: tool, `planner/bridge.py`
+- Delta: `focus_task` stores `{task_id, pinned: true}`. A later message that tries to create, and does not ask for a new task, updates that task instead. An update that names no other task keeps the pinned id.
+- Why: The assistant was creating a shopping list when the user had already pointed at one.
+- Result: eval not rerun

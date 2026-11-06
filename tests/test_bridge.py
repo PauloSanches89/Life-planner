@@ -13,6 +13,18 @@ def build(clock, tmp_path, opened=None):
     return JsApi(service, clock, open_url=opener), service
 
 
+def test_focus_task_tells_the_next_edit_which_task(clock, tmp_path):
+    api, service = build(clock, tmp_path)
+    task_id = api.create_task()["task"]["id"]
+
+    result = api.focus_task(task_id)
+
+    assert result["ok"] is True
+    assert result["screen"]["editing_task_id"] == task_id
+    assert service.get_intake() == {"task_id": task_id, "pinned": True}
+    assert api.focus_task("missing")["ok"] is False
+
+
 def test_create_task_lands_on_the_locked_day(clock, tmp_path):
     api, _service = build(clock, tmp_path)
     api.set_selected_day("2026-11-02")
@@ -142,7 +154,21 @@ def test_the_day_list_orders_alarms_and_records_spans(clock, tmp_path):
     screen = api.snapshot(None)["screen"]
 
     assert [item["title"] for item in screen["tasks"]] == ["Eight", "Nine", "Anytime"]
-    assert {"start": "2026-10-28", "end": "2026-10-30", "ongoing": False} in screen["spans"]
+    assert {"start": "2026-10-28", "end": "2026-10-30", "ongoing": False, "priority": ""} in screen["spans"]
+
+
+def test_priority_is_optional_and_can_be_cleared(clock, tmp_path):
+    api, service = build(clock, tmp_path)
+    task_id = api.create_task()["task"]["id"]
+
+    assert api.snapshot(task_id)["task"]["priority"] == ""
+    assert api.update_task(task_id, None, None, None, None, None, None, "low")["task"]["priority"] == "low"
+    medium = api.update_task(task_id, None, None, None, None, None, None, "medium")
+    assert medium["task"]["priority"] == "medium"
+    assert medium["screen"]["spans"][0]["priority"] == "medium"
+    assert api.update_task(task_id, None, None, None, None, None, None, "")["task"]["priority"] == ""
+    assert api.update_task(task_id, None, None, None, None, None, None, "urgent")["ok"] is False
+    assert service.get_task(task_id).priority == ""
 
 
 def test_open_link_allows_only_http_urls(clock, tmp_path):

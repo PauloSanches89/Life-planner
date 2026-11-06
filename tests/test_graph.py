@@ -697,6 +697,39 @@ def test_a_choice_of_shopping_list_updates_that_task_instead_of_creating_one(ser
     assert "The alarm is set." in turn.reply
 
 
+def test_a_pinned_task_is_edited_when_the_model_tries_to_create_another(service):
+    first = service.create_task("shopping list")
+    second = service.create_task("shopping list")
+    service.update_task(first.id, ongoing=True)
+    service.update_task(second.id, ongoing=True)
+    service.set_intake({"task_id": second.id, "pinned": True})
+    when = "2026-11-08T16:00:00+02:00"
+    base = ScriptedModel(
+        [base_decision(True, "", {"action": "create", "title": "shopping list", "alarm": when})]
+    )
+    editor = ScriptedModel(
+        [
+            editor_call("update_task", {"task_id": second.id}),
+            editor_call("set_alarm", {"task_id": second.id, "when": when}),
+        ]
+    )
+    reviewer = ScriptedModel([reviewer_reply("The alarm is set.")])
+
+    run_turn(
+        service,
+        "set an alarm for my shopping list on the 8th of november at 4pm",
+        "summary",
+        base,
+        editor,
+        reviewer,
+    )
+
+    assert len(service.list_tasks()) == 2
+    assert service.get_task(second.id).alarms[0].fires_at.hour == 16
+    assert service.get_task(first.id).alarms == []
+    assert second.id in base.seen[0][0].content
+
+
 def test_a_create_is_refused_while_the_user_still_has_to_choose(service):
     first = service.create_task("shopping list")
     second = service.create_task("shopping list")

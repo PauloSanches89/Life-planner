@@ -14,14 +14,16 @@ let openFields = new Set();
 let openFor = null;
 let showCalendar = false;
 let calendarCursor = null;
+let editingId = null;
 
 function api() {
   return {
     snapshot: (id) => rpc("snapshot", id),
     set_selected_day: (iso, id) => rpc("set_selected_day", iso, id),
     create_task: () => rpc("create_task"),
-    update_task: (id, title, description, start, end, ongoing, location) =>
-      rpc("update_task", id, title, description, start, end, ongoing, location),
+    update_task: (id, title, description, start, end, ongoing, location, priority) =>
+      rpc("update_task", id, title, description, start, end, ongoing, location, priority),
+    focus_task: (id) => rpc("focus_task", id),
     delete_task: (id) => rpc("delete_task", id),
     add_subtask: (id, text) => rpc("add_subtask", id, text),
     update_subtask: (id, subtaskId, text) => rpc("update_subtask", id, subtaskId, text),
@@ -96,6 +98,7 @@ function take(result) {
   screen = result.screen;
   task = result.task;
   selectedId = nextId;
+  if (screen && screen.editing_task_id) editingId = screen.editing_task_id;
   showError("");
   render();
   return true;
@@ -134,9 +137,7 @@ function renderCards() {
     open.append(el("div", "card-title", item.title || "Untitled"));
     const when = timeOnDay(item, screen.selected_day);
     if (when) open.append(el("div", "card-span", when));
-    if (item.ongoing) {
-      open.append(el("div", "card-span", "Ongoing"));
-    } else if (item.start !== item.end) {
+    if (!item.ongoing && item.start !== item.end) {
       open.append(el("div", "card-span", formatDay(item.start) + " – " + formatDay(item.end)));
     }
     if (item.location) open.append(el("div", "card-note", item.location));
@@ -151,26 +152,89 @@ function renderCards() {
       run(() => selectTask(item.id));
     });
     card.append(open);
+    if (item.priority) card.append(priorityButton(item));
 
     const bubbles = el("div", "bubbles");
+    if ((item.location || "").trim()) {
+      const place = el("button", "bubble map");
+      place.type = "button";
+      place.title = "Link to Map";
+      place.setAttribute("aria-label", "Link to Map");
+      place.append(icon(linkIcon("map")));
+      place.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const url = "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(item.location);
+        run(() => openLink(url));
+      });
+      bubbles.append(place);
+    }
     item.links.forEach((link) => {
-      const bubble = el("button", "bubble " + link.kind, link.kind === "drawio" ? "io" : "↗");
+      const kind = linkKind(link);
+      const bubble = el("button", "bubble " + kind);
       bubble.type = "button";
-      bubble.title = link.label;
-      bubble.setAttribute("aria-label", "Open " + link.label);
+      bubble.title = linkHover(link);
+      bubble.setAttribute("aria-label", linkHover(link));
+      bubble.append(icon(linkIcon(kind)));
       bubble.addEventListener("click", (event) => {
         event.stopPropagation();
         run(() => openLink(link.url));
       });
       bubbles.append(bubble);
     });
-    card.append(bubbles);
+    if (bubbles.childElementCount) card.append(bubbles);
     list.append(card);
   });
 
   const count = screen.tasks.length;
   const when = screen.selected_day === screen.today ? "today" : formatDay(screen.selected_day);
   document.getElementById("task-count").textContent = "Total tasks for " + when + ": " + count;
+}
+
+function linkKind(link) {
+  if (link.kind === "drawio") return "drawio";
+  return isMapLink(link) ? "map" : "generic";
+}
+
+function isMapLink(link) {
+  const url = (link.url || "").toLowerCase();
+  const label = (link.label || "").toLowerCase();
+  if (label === "map" || label.includes("map")) return true;
+  return /maps\.google|google\.[^/]+\/maps|openstreetmap|bing\.com\/maps|geo:/.test(url);
+}
+
+function linkHover(link) {
+  if (link.kind === "drawio") return "link to draw.io";
+  if (isMapLink(link)) return "Link to Map";
+  const label = (link.label || "").trim();
+  return label ? "Link to " + label : "Link";
+}
+
+function linkIcon(kind) {
+  if (kind === "drawio") return ["M5 6h6v6H5z", "M13 12h6v6h-6z", "M11 9h2", "M16 12v-1"];
+  if (kind === "map") {
+    return ["M12 21s7-6.1 7-11a7 7 0 1 0-14 0c0 4.9 7 11 7 11z", "M12 8.6a1.6 1.6 0 1 0 0 3.2a1.6 1.6 0 1 0 0-3.2"];
+  }
+  return [
+    "M10 13a5 5 0 0 0 7.1.4l1.8-1.8a5 5 0 0 0-7.1-7.1L10.6 5.7",
+    "M14 11a5 5 0 0 0-7.1-.4l-1.8 1.8a5 5 0 0 0 7.1 7.1l1.2-1.2",
+  ];
+}
+
+function icon(paths) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  paths.forEach((d) => {
+    const node = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    node.setAttribute("d", d);
+    node.setAttribute("fill", "none");
+    node.setAttribute("stroke", "currentColor");
+    node.setAttribute("stroke-width", "1.8");
+    node.setAttribute("stroke-linecap", "round");
+    node.setAttribute("stroke-linejoin", "round");
+    svg.append(node);
+  });
+  return svg;
 }
 
 function timeOnDay(item, day) {
@@ -194,6 +258,7 @@ function renderDetail() {
   }
 
   const titleRow = el("div", "title-row");
+  const titleBlock = el("div", "title-block");
   const title = el("input");
   title.id = "task-title";
   title.type = "text";
@@ -208,11 +273,23 @@ function renderDetail() {
     const value = title.value;
     run(() => saveTitle(id, value));
   });
-  const remove = el("button", null, "Delete");
+  const taskId = el("button", "task-id" + (editingId === task.id ? " pinned" : ""), task.id);
+  taskId.type = "button";
+  taskId.title = "Edit this task";
+  taskId.setAttribute("aria-label", "Tell the assistant to edit this task");
+  taskId.addEventListener("click", () => {
+    const id = task.id;
+    run(() => pinTask(id));
+  });
+  titleBlock.append(title, taskId, priorityButton(task));
+  const remove = el("button");
   remove.id = "delete-task";
   remove.type = "button";
+  remove.title = "delete";
+  remove.setAttribute("aria-label", "delete");
+  remove.append(icon(["M4 7h16", "M9 7V5h6v2", "M7 7l1 13h8l1-13", "M10 11v6", "M14 11v6"]));
   remove.addEventListener("click", () => run(deleteTask));
-  titleRow.append(title, remove);
+  titleRow.append(titleBlock, remove);
   detail.append(titleRow);
   detail.append(detailTabs());
   if (detailTab === "map") {
@@ -269,9 +346,16 @@ function monthCalendar() {
     const button = el("button", classes.join(" "));
     button.type = "button";
     button.append(el("span", "day-number", String(date.getDate())));
-    const busy = dayHasTasks(iso);
-    if (busy) button.append(el("span", "day-dot"));
-    button.setAttribute("aria-label", formatDay(iso) + (busy ? ", has tasks" : ""));
+    const mark = dayMark(iso);
+    if (mark.count) {
+      const dot = el("span", "day-dot" + (mark.priority ? " " + mark.priority : ""));
+      const size = Math.min(6 + (mark.count - 1) * 3, 16);
+      dot.style.width = size + "px";
+      dot.style.height = size + "px";
+      button.append(dot);
+    }
+    const taskWord = mark.count === 1 ? "task" : "tasks";
+    button.setAttribute("aria-label", formatDay(iso) + (mark.count ? ", " + mark.count + " " + taskWord : ""));
     button.addEventListener("click", () => run(() => selectCalendarDay(iso)));
     grid.append(button);
   }
@@ -279,13 +363,54 @@ function monthCalendar() {
   return wrap;
 }
 
-function dayHasTasks(iso) {
-  return (screen.spans || []).some((span) => {
-    if (span.ongoing) return true;
-    if (!span.start) return false;
-    const end = span.end || span.start;
-    return iso >= span.start && iso <= end;
+function dayMark(iso) {
+  const rank = { low: 1, medium: 2, high: 3 };
+  let count = 0;
+  let best = 0;
+  let priority = "";
+  (screen.spans || []).forEach((span) => {
+    if (!spanCovers(span, iso)) return;
+    count += 1;
+    const next = rank[span.priority] || 0;
+    if (next > best) {
+      best = next;
+      priority = span.priority;
+    }
   });
+  return { count, priority };
+}
+
+function spanCovers(span, iso) {
+  if (span.ongoing) return true;
+  if (!span.start) return false;
+  const end = span.end || span.start;
+  return iso >= span.start && iso <= end;
+}
+
+function priorityLabel(value) {
+  if (value === "low") return "Low";
+  if (value === "medium") return "Medium";
+  if (value === "high") return "High";
+  return "Priority";
+}
+
+function nextPriority(value) {
+  const order = ["", "low", "medium", "high"];
+  const index = order.indexOf(value || "");
+  return order[(index + 1) % order.length];
+}
+
+function priorityButton(item) {
+  const button = el("button", "priority" + (item.priority ? " " + item.priority : ""), priorityLabel(item.priority));
+  button.type = "button";
+  button.title = "Change priority";
+  button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const id = item.id;
+    const next = nextPriority(item.priority);
+    run(() => savePriority(id, next));
+  });
+  return button;
 }
 
 function isoFromDate(date) {
@@ -429,7 +554,8 @@ function spanFields() {
     dateField("Start", "start-date", task.ongoing ? "" : task.start, task.ongoing),
     dateField("End", "end-date", task.ongoing ? "" : task.end, task.ongoing)
   );
-  wrap.append(toggle, row);
+  wrap.append(toggle);
+  if (!task.ongoing) wrap.append(row);
   return wrap;
 }
 
@@ -584,6 +710,12 @@ function applyFocus() {
   focusTarget = null;
 }
 
+async function pinTask(id) {
+  const result = await api().focus_task(id);
+  if (result && result.ok) editingId = id;
+  take(result);
+}
+
 async function selectTask(id) {
   take(await api().snapshot(id));
 }
@@ -593,6 +725,17 @@ async function createTask() {
   const result = await api().create_task();
   focusTarget = "title";
   take(result);
+}
+
+async function showToday() {
+  if (!screen) return;
+  showCalendar = false;
+  if (screen.selected_day === screen.today) {
+    render();
+    return;
+  }
+  calendarCursor = screen.today.slice(0, 7);
+  await commit(await api().set_selected_day(screen.today, selectedId), selectedId);
 }
 
 async function shiftDay(days) {
@@ -612,6 +755,10 @@ async function saveDescription(id, value) {
   await commit(await api().update_task(id, null, value, null, null, null, null), id);
 }
 
+async function savePriority(id, value) {
+  await commit(await api().update_task(id, null, null, null, null, null, null, value), id);
+}
+
 async function saveLocation(id, value) {
   await commit(await api().update_task(id, null, null, null, null, null, value), id);
 }
@@ -619,8 +766,10 @@ async function saveLocation(id, value) {
 async function saveSpan() {
   const id = selectedId;
   const ongoing = document.getElementById("ongoing").checked;
-  let start = document.getElementById("start-date").value || null;
-  let end = document.getElementById("end-date").value || null;
+  const startInput = document.getElementById("start-date");
+  const endInput = document.getElementById("end-date");
+  let start = startInput ? startInput.value || null : null;
+  let end = endInput ? endInput.value || null : null;
   if (ongoing) {
     start = null;
     end = null;
@@ -778,6 +927,7 @@ document.getElementById("chat-form").addEventListener("submit", (event) => {
   chatBusy = true;
   run(() => sendChat(message));
 });
+document.getElementById("today").addEventListener("click", () => run(showToday));
 document.getElementById("previous-day").addEventListener("click", () => run(() => shiftDay(-1)));
 document.getElementById("next-day").addEventListener("click", () => run(() => shiftDay(1)));
 document.getElementById("selected-day").addEventListener("click", () => {
@@ -845,7 +995,7 @@ async function sendChat(message) {
       method: "POST",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message }),
+      body: JSON.stringify(editingId ? { message, task_id: editingId } : { message }),
     });
     if (response.status === 401) {
       showGate(await response.json());

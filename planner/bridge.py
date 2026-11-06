@@ -53,6 +53,7 @@ def _task_summary(task: Task, detailed: bool) -> dict:
         "end": _iso_date(task.end_date),
         "ongoing": task.ongoing,
         "location": task.location,
+        "priority": task.priority,
         "links": [_link_dict(link) for link in task.links],
         "alarms": [_alarm_dict(alarm) for alarm in task.alarms],
     }
@@ -83,6 +84,7 @@ def _task_dict(task: Task) -> dict:
         "end": _iso_date(task.end_date),
         "ongoing": task.ongoing,
         "location": task.location,
+        "priority": task.priority,
         "created_at": task.created_at.isoformat(),
         "subtasks": [_subtask_dict(item) for item in task.subtasks],
         "links": [_link_dict(link) for link in task.links],
@@ -136,7 +138,9 @@ class JsApi:
 
         return _invoke(action)
 
-    def update_task(self, task_id, title, description, start_date, end_date, ongoing=None, location=None):
+    def update_task(
+        self, task_id, title, description, start_date, end_date, ongoing=None, location=None, priority=None
+    ):
         def action():
             changes = {}
             if title is not None:
@@ -153,7 +157,19 @@ class JsApi:
                 changes["ongoing"] = ongoing
             if location is not None:
                 changes["location"] = location
+            if priority is not None:
+                if not isinstance(priority, str):
+                    raise ValueError("priority must be a string")
+                changes["priority"] = priority
             self._service.update_task(task_id, **changes)
+            return self._payload(task_id)
+
+        return _invoke(action)
+
+    def focus_task(self, task_id):
+        def action():
+            self._service.get_task(task_id)
+            self._service.set_intake({"task_id": task_id, "pinned": True})
             return self._payload(task_id)
 
         return _invoke(action)
@@ -281,6 +297,7 @@ class JsApi:
                     "start": _iso_date(task.start_date),
                     "end": _iso_date(task.end_date),
                     "ongoing": task.ongoing,
+                    "priority": task.priority,
                 }
                 for task in self._service.list_tasks()
             ],
@@ -289,7 +306,17 @@ class JsApi:
             "can_redo": history.can_redo,
             "mode": self._view.mode,
             "summary": self._service.get_summary(),
+            "editing_task_id": self._editing_task_id(),
         }
+
+    def _editing_task_id(self) -> str:
+        intake = self._service.get_intake()
+        if intake.get("pinned") is not True:
+            return ""
+        candidate = str(intake.get("task_id") or "").strip()
+        if any(task.id == candidate for task in self._service.list_tasks()):
+            return candidate
+        return ""
 
     def _payload(self, task_id: str | None) -> dict:
         screen = self._screen()

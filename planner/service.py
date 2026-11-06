@@ -120,6 +120,7 @@ class PlannerService:
         end_date: date | None = None,
         ongoing: bool | None = None,
         location: str | None = None,
+        priority: str | None = None,
     ) -> Task:
         with self._lock:
             document = self._store.load()
@@ -142,6 +143,11 @@ class PlannerService:
                 task.description = description
             if location is not None:
                 task.location = location.strip()
+            if priority is not None:
+                cleaned = priority.strip().lower()
+                if cleaned not in {"", "low", "medium", "high"}:
+                    raise ValueError("priority must be low, medium, high, or empty")
+                task.priority = cleaned
             task.start_date = new_start
             task.end_date = new_end
             task.ongoing = new_ongoing
